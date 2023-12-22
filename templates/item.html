@@ -1,0 +1,140 @@
+{{$StoryID := .Story.ID}}
+{{with .Story}}
+<html lang="en" op="item">
+
+<head>
+  <meta name="referrer" content="origin">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" type="text/css" href="news.css">
+  <link rel="icon" href="y18.svg">
+  <title>{{.Title}} | Hacker News</title>
+</head>
+
+<body>
+  <center>
+    <table id="hnmain" border="0" cellpadding="0" cellspacing="0" width="85%" bgcolor="#f6f6ef">
+      <tr>
+        <td bgcolor="#ff6600">
+          <table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:2px">
+            <tr>
+              <td style="width:18px;padding-right:4px"><a href="https://news.ycombinator.com"><img src="y18.svg"
+                    width="18" height="18" style="border:1px white solid; display:block"></a></td>
+              <td style="line-height:12pt; height:10px;"><span class="pagetop"><b class="hnname"><a href="news">Hacker
+                      News</a></b>
+                  <a href="newest">new</a> | <a href="front">past</a> | <a href="newcomments">comments</a> | <a
+                    href="ask">ask</a> | <a href="show">show</a> | <a href="jobs">jobs</a> | <a href="submit">submit</a>
+                </span></td>
+              <td style="text-align:right;padding-right:4px;"><span class="pagetop">
+                  <a href="login?goto=item%3Fid%3D{{$StoryID}}">login</a>
+                </span></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr id="pagespace" title="{{.Title}}"
+        style="height:10px"></tr>
+      <tr>
+        <td>
+          <table class="fatitem" border="0">
+            <tr class='athing' id='{{$StoryID}}'>
+              <td align="right" valign="top" class="title"><span class="rank"></span></td>
+              <td valign="top" class="votelinks">
+                <center><a id='up_{{$StoryID}}' href='vote?id={{$StoryID}}&amp;how=up&amp;goto=item%3Fid%3D{{$StoryID}}'>
+                    <div class='votearrow' title='upvote'></div>
+                  </a></center>
+              </td>
+              <td class="title"><span class="titleline"><a
+                    href="{{.URL}}" rel="noreferrer">{{.Title}}</a><span class="sitebit comhead"> (<a
+                      href="from?site={{.Site}}"><span class="sitestr">{{.Site}}</span></a>)</span></span>
+              </td>
+            </tr>
+            <tr>
+              <td colspan="2"></td>
+              <td class="subtext"><span class="subline">
+                  <span class="score" id="score_{{$StoryID}}">{{.Score}} points</span> by <a href="user?id={{.SubmitterName}}"
+                    class="hnuser">{{.SubmitterName}}</a> <span class="age" title="{{.SubmissionTime | rfc3339}}"><a
+                      href="item?id={{$StoryID}}">{{.SubmissionTime | ago}} ago</a></span> <span id="unv_{{$StoryID}}"></span> | <a
+                    href="hide?id={{$StoryID}}&amp;goto=item%3Fid%3D{{$StoryID}}">hide</a> | <a
+                    href="https://hn.algolia.com/?query={{.Title}}&type=story&dateRange=all&sort=byDate&storyText=false&prefix&page=0"
+                    class="hnpast">past</a> | <a
+                    href="fave?id={{$StoryID}}&amp;auth=5c7dfe9ac02f25e80518fa002993ff20fa436162">favorite</a> | <a
+                    href="item?id={{$StoryID}}">{{.CommentCount}} comments</a> </span>
+              </td>
+            </tr>
+            <tr style="height:10px"></tr>
+            <tr>
+              <td colspan="2"></td>
+              <td>
+                <form action="comment" method="post"><input type="hidden" name="parent" value="{{$StoryID}}"><input
+                    type="hidden" name="goto" value="item?id={{$StoryID}}"><input type="hidden" name="hmac"
+                    value="622de565f2e6f24c5f6378d040003dcb59fba8fc"><textarea name="text" rows="8" cols="80"
+                    wrap="virtual"></textarea><br><br>
+                  <input type="submit" value="add comment">
+                </form>
+              </td>
+            </tr>
+          </table><br><br>
+          {{end}}
+          <table border="0" class='comment-tree'>
+            {{range .CommentTree}}
+            <tr class='athing comtr' id='{{.Comment.ID}}'>
+              <td>
+                <table border='0'>
+                  <tr>
+                    <td class='ind' indent='{{.Level}}'><img src="s.gif" height="1" width="{{multiply .Level 40}}"></td>
+                    <td valign="top" class="votelinks">
+                      <center><a id='up_{{.Comment.ID}}' href='vote?id={{.Comment.ID}}&amp;how=up&amp;goto=item%3Fid%3D{{$StoryID}}'>
+                          <div class='votearrow' title='upvote'></div>
+                        </a></center>
+                    </td>
+                    <td class="default">
+                      <div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead">
+                          <a href="user?id={{.Comment.SubmitterName}}" class="hnuser">{{.Comment.SubmitterName}}</a> <span class="age" title="{{.Comment.SubmissionTime | rfc3339}}"><a
+                              href="item?id={{.Comment.ID}}">{{.Comment.SubmissionTime | ago}} ago</a></span> <span id="unv_{{.Comment.ID}}"></span> <span
+                            class='navs'>
+                            | <a href="#38708517" class="clicky" aria-hidden="true">next</a> <a class="togg clicky"
+                              id="{{.Comment.ID}}" n="1" href="javascript:void(0)">[–]</a><span class="onstory"></span> </span>
+                        </span></div><br>
+                      <div class="comment">
+                        <span class="commtext c00">{{.Comment.Text}}</span>
+                        <div class='reply'>
+                          <p>
+                            <font size="1">
+                              <u><a href="reply?id={{.Comment.ID}}&amp;goto=item%3Fid%3D{{$StoryID}}%23{{.Comment.ID}}"
+                                  rel="nofollow">reply</a></u>
+                            </font>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {{end}}
+          </table>
+          <br><br>
+        </td>
+      </tr>
+      <tr>
+        <td><img src="s.gif" height="10" width="0">
+          <table width="100%" cellspacing="0" cellpadding="1">
+            <tr>
+              <td bgcolor="#ff6600"></td>
+            </tr>
+          </table><br>
+          <center><span class="yclinks"><a href="newsguidelines.html">Guidelines</a> | <a href="newsfaq.html">FAQ</a> |
+              <a href="lists">Lists</a> | <a href="https://github.com/HackerNews/API">API</a> | <a
+                href="security.html">Security</a> | <a href="https://www.ycombinator.com/legal/">Legal</a> | <a
+                href="https://www.ycombinator.com/apply/">Apply to YC</a> | <a
+                href="mailto:hn@ycombinator.com">Contact</a></span><br><br>
+            <form method="get" action="//hn.algolia.com/">Search: <input type="text" name="q" size="17"
+                autocorrect="off" spellcheck="false" autocapitalize="off" autocomplete="false"></form>
+          </center>
+        </td>
+      </tr>
+    </table>
+  </center>
+</body>
+<script type='text/javascript' src='hn.js'></script>
+
+</html>
