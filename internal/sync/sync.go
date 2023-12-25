@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 
@@ -97,32 +98,57 @@ func requestItem(itemID ItemID) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func requestItemChan(itemId ItemID, ch chan []byte, errCh chan ItemID) {
+	itemData, err := requestItem(itemId)
+	if err != nil {
+		fmt.Printf("sync.requestItemChan: error requesting item %d: %v\n", itemId, err)
+		errCh <- itemId
+		return
+	}
+	ch <- itemData
+}
+
 func (s *Sync) itemRequesterInit() error {
 	go func() {
-		lastMaxItemKnown := s.maxItemWritten
-		for {
-			newMaxItemKnown := <-s.newMaxItemKnown
-			if newMaxItemKnown > lastMaxItemKnown {
-				for itemID := lastMaxItemKnown + 1; itemID <= newMaxItemKnown; itemID++ {
-					item, err := requestItem(itemID)
-					if err != nil {
-						fmt.Printf("sync.itemRequesterInit: error requesting item %d: %v\n", itemID, err)
-						continue
-					}
-					err = s.csvWriter.Write([]string{string(item)})
-					if err != nil {
-						fmt.Printf("sync.itemRequesterInit: error writing item %d: %v\n", itemID, err)
-						continue
-					}
-					s.csvWriter.Flush()
-					err = s.csvWriter.Error()
-					if err != nil {
-						fmt.Printf("sync.itemRequesterInit: error flushing csv writer: %v\n", err)
-					}
-					fmt.Printf("sync: wrote item %d\n", itemID)
-					s.maxItemWritten = itemID
+		itemTable := make(map[ItemID]chan []byte)
+		errCh := make(chan ItemID, 1)
+		maxItemKnown := s.maxItemWritten
+
+		updateRequestsInFlight := func() {
+			for i := s.maxItemWritten + 1; i <= maxItemKnown; i++ {
+				if len(itemTable) >= 5 {
+					break
 				}
-				lastMaxItemKnown = newMaxItemKnown
+				if _, ok := itemTable[i]; ok {
+					continue
+				}
+				itemTable[i] = make(chan []byte, 1)
+				go requestItemChan(i, itemTable[i], errCh)
+			}
+		}
+
+		for {
+			select {
+			case maxItemKnown = <-s.newMaxItemKnown:
+				updateRequestsInFlight()
+			case nextItem := <-itemTable[s.maxItemWritten+1]:
+				delete(itemTable, s.maxItemWritten+1)
+				err := s.csvWriter.Write([]string{string(nextItem)})
+				if err != nil {
+					log.Fatalf("sync.itemRequesterInit: error writing item %d: %v\n", s.maxItemWritten+1, err)
+					continue
+				}
+				s.csvWriter.Flush()
+				err = s.csvWriter.Error()
+				if err != nil {
+					log.Fatalf("sync.itemRequesterInit: error flushing csv writer: %v\n", err)
+				}
+				s.maxItemWritten++
+				fmt.Printf("sync: wrote item %d\n", s.maxItemWritten)
+				updateRequestsInFlight()
+			case itemId := <-errCh:
+				fmt.Printf("sync: retrying item: %d\n", itemId)
+				go requestItemChan(itemId, itemTable[itemId], errCh)
 			}
 		}
 	}()
