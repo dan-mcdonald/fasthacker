@@ -19,7 +19,7 @@ type Sync struct {
 	DBPath          string
 	maxItemWritten  ItemID
 	newMaxItemKnown chan ItemID
-	csvWriter       *csv.Writer
+	csvWriter       *csv.Writer // TODO switch to ndjson
 }
 
 type MaxitemPutData struct {
@@ -116,7 +116,7 @@ func (s *Sync) itemRequesterInit() error {
 
 		updateRequestsInFlight := func() {
 			for i := s.maxItemWritten + 1; i <= maxItemKnown; i++ {
-				if len(itemTable) >= 5 {
+				if len(itemTable) >= 10 {
 					break
 				}
 				if _, ok := itemTable[i]; ok {
