@@ -7,38 +7,41 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/dan-mcdonald/fasthacker/internal/loader"
+	"github.com/dan-mcdonald/fasthacker/internal/model"
 )
 
 type fastHacker struct {
 	staticHandler http.Handler
 	indexTmpl     *template.Template
 	itemTmpl      *template.Template
-	dl            DataLoader
+	dl            loader.DataLoader
 }
 
-func ago(t Time) string {
+func ago(t model.Time) string {
 	return time.Since(t.Time).Round(time.Second).String()
 }
 
 type StoryListPage struct {
 	RankOffset int
-	Stories    []Story
+	Stories    []model.Item
 }
 
 type TraversedComment struct {
-	Comment Comment
+	Comment model.Item
 	Level   int
 }
 
 type StoryPage struct {
-	Story       *Story
+	Story       *model.Item
 	CommentTree []TraversedComment
 }
 
-func GetCommentTree(story Story, dl *DataLoader) ([]TraversedComment, error) {
+func GetCommentTree(story model.Item, dl *loader.DataLoader) ([]TraversedComment, error) {
 	var commentTraversal []TraversedComment
-	var traverse func(CommentID, int) error
-	traverse = func(commentId CommentID, level int) error {
+	var traverse func(model.ItemID, int) error
+	traverse = func(commentId model.ItemID, level int) error {
 		comment, err := (*dl).GetComment(commentId)
 		if err != nil {
 			return err
@@ -47,7 +50,7 @@ func GetCommentTree(story Story, dl *DataLoader) ([]TraversedComment, error) {
 			Comment: comment,
 			Level:   level,
 		})
-		for _, kidId := range comment.Kids {
+		for _, kidId := range *comment.Kids {
 			err = traverse(kidId, level+1)
 			if err != nil {
 				return err
@@ -55,7 +58,7 @@ func GetCommentTree(story Story, dl *DataLoader) ([]TraversedComment, error) {
 		}
 		return nil
 	}
-	for _, commentId := range story.Kids {
+	for _, commentId := range *story.Kids {
 		err := traverse(commentId, 0)
 		if err != nil {
 			return nil, err
@@ -70,7 +73,7 @@ func (srv *fastHacker) handleItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
-	storyId := StoryID(0)
+	storyId := model.ItemID(0)
 	fmt.Sscanf(id, "%d", &storyId)
 	story, err := srv.dl.GetStory(storyId)
 	if err != nil {
@@ -106,7 +109,7 @@ func (srv *fastHacker) handleDefault(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	var stories []Story
+	var stories []model.Item
 	for idx, storyId := range topStories {
 		if idx > 30 {
 			break
@@ -129,7 +132,7 @@ func (srv *fastHacker) handleDefault(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func rfc3339(t Time) string {
+func rfc3339(t model.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
@@ -165,7 +168,7 @@ func main() {
 		indexTmpl:     indexTmpl,
 		itemTmpl:      itemTmpl,
 		staticHandler: http.FileServer(http.Dir("static")),
-		dl:            NewLoader(ctx),
+		dl:            loader.NewLoader(ctx),
 	}
 	http.HandleFunc("/", fastHacker.handleDefault)
 	http.HandleFunc("/item", fastHacker.handleItem)

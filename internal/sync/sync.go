@@ -9,24 +9,44 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
+	"github.com/dan-mcdonald/fasthacker/internal/model"
 	sse "github.com/r3labs/sse/v2"
 )
 
-type ItemID int64
-
 type Sync struct {
 	DBPath          string
-	maxItemWritten  ItemID
-	newMaxItemKnown chan ItemID
-	csvWriter       *csv.Writer // TODO switch to ndjson
+	maxItemWritten  model.ItemID
+	newMaxItemKnown chan model.ItemID
+	csvWriter       *csv.Writer
+}
+
+type FasthackerTransport struct{}
+
+var customHeaders = map[string]string{
+	"User-Agent": "fasthacker",
+	"From":       "daniel@mcd.onald.net",
+}
+
+func (t *FasthackerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range customHeaders {
+		req.Header.Set(k, v)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+var httpClient = http.Client{
+	Transport: &FasthackerTransport{},
+	Timeout:   30 * time.Second,
 }
 
 type MaxitemPutData struct {
-	MaxItem ItemID `json:"data"`
+	MaxItem model.ItemID `json:"data"`
 }
 
-func (s *Sync) handleMessage(msg *sse.Event) {
+func (s *Sync) handleMaxItemEvent(msg *sse.Event) {
 	msgEvent := string(msg.Event[:])
 	switch msgEvent {
 	case "put":
@@ -37,8 +57,34 @@ func (s *Sync) handleMessage(msg *sse.Event) {
 		}
 		fmt.Printf("sync: new maxitem value %d\n", maxitemPutData.MaxItem)
 		s.newMaxItemKnown <- maxitemPutData.MaxItem
-	case "patch":
-		fmt.Printf("sync: maxitem patch: %s\n", string(msg.Data[:]))
+	case "keep-alive":
+		break
+	default:
+		fmt.Printf("sync: maxitem unknown event: %s\n", msgEvent)
+	}
+}
+
+type UpdatePutData struct {
+	ItemIDs []model.ItemID `json:"items"`
+	UserIDs []model.UserID `json:"profiles"`
+}
+
+func (s *Sync) handleUpdateEvent(msg *sse.Event) {
+	msgEvent := string(msg.Event[:])
+	switch msgEvent {
+	case "put":
+		jsonDecoder := json.NewDecoder(bytes.NewReader(msg.Data))
+		var updatePutData UpdatePutData
+		if err := jsonDecoder.Decode(&updatePutData); err != nil {
+			fmt.Printf("sync.handleUpdateEvent: error decoding update put data: %v", err)
+		}
+		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutData.ItemIDs), len(updatePutData.UserIDs))
+		for _, itemId := range updatePutData.ItemIDs {
+			go requestItemChan(itemId, nil, nil)
+		}
+		for _, userId := range updatePutData.UserIDs {
+			go requestUserChan(userId, nil, nil)
+		}
 	case "keep-alive":
 		break
 	default:
@@ -47,7 +93,7 @@ func (s *Sync) handleMessage(msg *sse.Event) {
 }
 
 type MinimalItem struct {
-	ID ItemID `json:"id"`
+	ID model.ItemID `json:"id"`
 }
 
 func (s *Sync) dbInit() error {
@@ -58,7 +104,7 @@ func (s *Sync) dbInit() error {
 	csvReader := csv.NewReader(fileHandle)
 	csvReader.FieldsPerRecord = 1
 	csvReader.ReuseRecord = true
-	rowNumber := ItemID(0)
+	rowNumber := model.ItemID(0)
 	for {
 		rowNumber++
 		record, err := csvReader.Read()
@@ -78,27 +124,58 @@ func (s *Sync) dbInit() error {
 			return fmt.Errorf("sync.dbInit: item at row %d ID was unexpected: %s", rowNumber, record[0])
 		}
 	}
-	s.maxItemWritten = ItemID(rowNumber)
+	s.maxItemWritten = model.ItemID(rowNumber)
 	s.csvWriter = csv.NewWriter(fileHandle)
 	return nil
 }
 
-func requestItem(itemID ItemID) ([]byte, error) {
+func requestItem(itemID model.ItemID) (ItemUpdate, error) {
 	fmt.Printf("sync: requesting item %d\n", itemID)
 	resp, err := http.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", itemID))
 	if err != nil {
-		return []byte{}, err
+		return ItemUpdate{}, err
 	}
 	defer resp.Body.Close()
 	buf := new(bytes.Buffer)
 	_, err = buf.ReadFrom(resp.Body)
+	rxTime := time.Now()
 	if err != nil {
-		return []byte{}, err
+		return ItemUpdate{}, err
 	}
-	return buf.Bytes(), nil
+	return ItemUpdate{
+		RxTime: rxTime,
+		Data:   buf.Bytes(),
+	}, nil
 }
 
-func requestItemChan(itemId ItemID, ch chan []byte, errCh chan ItemID) {
+type DataUpdate struct {
+	RxTime time.Time
+	Data   []byte
+}
+
+type UserUpdate DataUpdate
+type ItemUpdate DataUpdate
+
+func requestUser(userID model.UserID) (UserUpdate, error) {
+	fmt.Printf("requesting user %s\n", userID)
+	resp, err := http.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/user/%s.json", userID))
+	if err != nil {
+		return UserUpdate{}, err
+	}
+	defer resp.Body.Close()
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(resp.Body)
+	rxTime := time.Now()
+	if err != nil {
+		return UserUpdate{}, err
+	}
+	return UserUpdate{
+		RxTime: rxTime,
+		Data:   buf.Bytes(),
+	}, nil
+}
+
+func requestItemChan(itemId model.ItemID, ch chan ItemUpdate, errCh chan model.ItemID) {
 	itemData, err := requestItem(itemId)
 	if err != nil {
 		fmt.Printf("sync.requestItemChan: error requesting item %d: %v\n", itemId, err)
@@ -108,10 +185,20 @@ func requestItemChan(itemId ItemID, ch chan []byte, errCh chan ItemID) {
 	ch <- itemData
 }
 
+func requestUserChan(userId model.UserID, ch chan UserUpdate, errCh chan model.UserID) {
+	itemData, err := requestUser(userId)
+	if err != nil {
+		fmt.Printf("error requesting item %s: %v\n", userId, err)
+		errCh <- userId
+		return
+	}
+	ch <- itemData
+}
+
 func (s *Sync) itemRequesterInit() error {
 	go func() {
-		itemTable := make(map[ItemID]chan []byte)
-		errCh := make(chan ItemID, 1)
+		itemUpdateCh := make(chan ItemUpdate, 1)
+		errCh := make(chan model.ItemID, 1)
 		maxItemKnown := s.maxItemWritten
 
 		updateRequestsInFlight := func() {
@@ -122,7 +209,7 @@ func (s *Sync) itemRequesterInit() error {
 				if _, ok := itemTable[i]; ok {
 					continue
 				}
-				itemTable[i] = make(chan []byte, 1)
+				itemTable[i] = make(chan ItemUpdate, 1)
 				go requestItemChan(i, itemTable[i], errCh)
 			}
 		}
@@ -131,9 +218,12 @@ func (s *Sync) itemRequesterInit() error {
 			select {
 			case maxItemKnown = <-s.newMaxItemKnown:
 				updateRequestsInFlight()
-			case nextItem := <-itemTable[s.maxItemWritten+1]:
+			case itemUpdate := <-itemTable[s.maxItemWritten+1]:
 				delete(itemTable, s.maxItemWritten+1)
-				err := s.csvWriter.Write([]string{string(nextItem)})
+				err := s.csvWriter.Write([]string{
+					strconv.FormatInt(itemUpdate.RxTime.Unix(), 10),
+					string(itemUpdate.Data)},
+				)
 				if err != nil {
 					log.Fatalf("sync.itemRequesterInit: error writing item %d: %v\n", s.maxItemWritten+1, err)
 					continue
@@ -157,19 +247,32 @@ func (s *Sync) itemRequesterInit() error {
 
 func (s *Sync) maxItemListenerInit() error {
 	client := sse.NewClient("https://hacker-news.firebaseio.com/v0/maxitem.json")
+	client.Headers
 	client.OnConnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE maxitem connected")
 	})
 	client.OnDisconnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE maxitem disconnected")
 	})
-	client.Subscribe("", s.handleMessage)
+	client.Subscribe("", s.handleMaxItemEvent)
+	return nil
+}
+
+func (s *Sync) updateListenerInit() error {
+	client := sse.NewClient("https://hacker-news.firebaseio.com/v0/updates.json")
+	client.OnConnect(func(c *sse.Client) {
+		fmt.Println("sync: SSE updates connected")
+	})
+	client.OnDisconnect(func(c *sse.Client) {
+		fmt.Println("sync: SSE updates disconnected")
+	})
+	client.Subscribe("", s.handleUpdateEvent)
 	return nil
 }
 
 // Run runs the sync.
 func (s *Sync) Run() error {
-	s.newMaxItemKnown = make(chan ItemID, 1)
+	s.newMaxItemKnown = make(chan model.ItemID, 1)
 
 	err := s.dbInit()
 	if err != nil {
@@ -183,6 +286,11 @@ func (s *Sync) Run() error {
 	}
 
 	err = s.maxItemListenerInit()
+	if err != nil {
+		return err
+	}
+
+	err = s.updateListenerInit()
 	if err != nil {
 		return err
 	}

@@ -14,8 +14,8 @@ import (
 
 type DataLoader interface {
 	GetTopStories() (model.TopStories, error)
-	GetStory(id model.StoryID) (model.Story, error)
-	GetComment(id model.CommentID) (model.Comment, error)
+	GetStory(id model.ItemID) (model.Item, error)
+	GetComment(id model.ItemID) (model.Item, error)
 }
 
 type FirebaseNewsDataLoader struct {
@@ -24,8 +24,8 @@ type FirebaseNewsDataLoader struct {
 
 type CachingDataLoader struct {
 	delegate     DataLoader
-	storyCache   *cache.Cache[model.StoryID, model.Story]
-	commentCache *cache.Cache[model.CommentID, model.Comment]
+	storyCache   *cache.Cache[model.ItemID, model.Item]
+	commentCache *cache.Cache[model.ItemID, model.Item]
 	topStories   *model.TopStories
 }
 
@@ -36,8 +36,8 @@ func NewLoader(ctx context.Context) DataLoader {
 				Timeout: 15 * time.Second,
 			},
 		},
-		storyCache:   cache.NewContext[model.StoryID, model.Story](ctx),
-		commentCache: cache.NewContext[model.CommentID, model.Comment](ctx),
+		storyCache:   cache.NewContext[model.ItemID, model.Item](ctx),
+		commentCache: cache.NewContext[model.ItemID, model.Item](ctx),
 		topStories:   nil,
 	}
 }
@@ -52,7 +52,7 @@ func (c CachingDataLoader) GetTopStories() (model.TopStories, error) {
 	return topStories, err
 }
 
-func (c CachingDataLoader) GetStory(id model.StoryID) (model.Story, error) {
+func (c CachingDataLoader) GetStory(id model.ItemID) (model.Item, error) {
 	story, ok := c.storyCache.Get(id)
 	if ok {
 		log.Printf("CachingDataLoader.GetStory(%d): cache hit", id)
@@ -61,13 +61,13 @@ func (c CachingDataLoader) GetStory(id model.StoryID) (model.Story, error) {
 	log.Printf("CachingDataLoader.GetStory(%d): cache miss", id)
 	story, err := c.delegate.GetStory(id)
 	if err != nil {
-		return model.Story{}, err
+		return model.Item{}, err
 	}
 	c.storyCache.Set(id, story)
 	return story, nil
 }
 
-func (c CachingDataLoader) GetComment(id model.CommentID) (model.Comment, error) {
+func (c CachingDataLoader) GetComment(id model.ItemID) (model.Item, error) {
 	comment, ok := c.commentCache.Get(id)
 	if ok {
 		log.Printf("CachingDataLoader.GetComment(%d): cache hit", id)
@@ -76,7 +76,7 @@ func (c CachingDataLoader) GetComment(id model.CommentID) (model.Comment, error)
 	log.Printf("CachingDataLoader.GetComment(%d): cache miss", id)
 	comment, err := c.delegate.GetComment(id)
 	if err != nil {
-		return model.Comment{}, err
+		return model.Item{}, err
 	}
 	c.commentCache.Set(id, comment)
 	return comment, nil
@@ -94,32 +94,32 @@ func (fb FirebaseNewsDataLoader) GetTopStories() (model.TopStories, error) {
 	return topStories, err
 }
 
-func (fb FirebaseNewsDataLoader) GetStory(id model.StoryID) (model.Story, error) {
+func (fb FirebaseNewsDataLoader) GetStory(id model.ItemID) (model.Item, error) {
 	resp, err := fb.c.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", id))
 	if err != nil {
-		return model.Story{}, err
+		return model.Item{}, err
 	}
 	defer resp.Body.Close()
 	jsonDecoder := json.NewDecoder(resp.Body)
-	var story model.Story
+	var story model.Item
 	err = jsonDecoder.Decode(&story)
 	if err != nil {
-		return model.Story{}, err
+		return model.Item{}, err
 	}
 	return story, nil
 }
 
-func (fb FirebaseNewsDataLoader) GetComment(id model.CommentID) (model.Comment, error) {
+func (fb FirebaseNewsDataLoader) GetComment(id model.ItemID) (model.Item, error) {
 	resp, err := fb.c.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", id))
 	if err != nil {
-		return model.Comment{}, err
+		return model.Item{}, err
 	}
 	defer resp.Body.Close()
 	jsonDecoder := json.NewDecoder(resp.Body)
-	var comment model.Comment
+	var comment model.Item
 	err = jsonDecoder.Decode(&comment)
 	if err != nil {
-		return model.Comment{}, err
+		return model.Item{}, err
 	}
 	return comment, nil
 }

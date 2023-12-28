@@ -2,23 +2,39 @@ package model
 
 import (
 	"encoding/json"
-	"html/template"
 	"net/url"
 	"time"
 )
 
-type CommentID int
+type UserID string
+type ItemID int64
 
-type Comment struct {
-	SubmitterName  string `json:"by"`
-	ID             CommentID
-	Kids           []CommentID
-	Text           template.HTML
-	SubmissionTime Time `json:"time"`
+type User struct {
+	ID        UserID    `json:"id"`
+	Created   Time      `json:"created"`
+	Karma     int       `json:"karma"`
+	About     *string   `json:"about"`
+	Submitted *[]ItemID `json:"submitted"`
 }
 
-type StoryID int
-type TopStories []StoryID
+type Item struct {
+	ID          ItemID    `json:"id"`
+	Deleted     *bool     `json:"deleted"`
+	Type        string    `json:"type"`
+	By          *UserID   `json:"by"`
+	Time        Time      `json:"time"`
+	Text        *string   `json:"text"`
+	Dead        *bool     `json:"dead"`
+	Parent      *ItemID   `json:"parent"`
+	Kids        *[]ItemID `json:"kids"`
+	URL         *string   `json:"url"`
+	Score       *int      `json:"score"`
+	Title       *string   `json:"title"`
+	Parts       *[]ItemID `json:"parts"`
+	Descendants *int      `json:"descendants"`
+}
+
+type TopStories []ItemID
 
 type Time struct {
 	time.Time
@@ -33,19 +49,12 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type Story struct {
-	Title          string
-	URL            string
-	Score          int
-	SubmitterName  string `json:"by"`
-	SubmissionTime Time   `json:"time"`
-	ID             int
-	CommentCount   int `json:"descendants"`
-	Kids           []CommentID
+func (t Time) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Unix())
 }
 
-func (s *Story) Site() (string, error) {
-	parsedUrl, err := url.Parse(s.URL)
+func (s *Item) Site() (string, error) {
+	parsedUrl, err := url.Parse(*s.URL)
 	if err != nil {
 		return "", err
 	}
