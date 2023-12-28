@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/dan-mcdonald/fasthacker/internal/model"
@@ -131,7 +129,7 @@ func (s *Sync) dbInit() error {
 
 func requestItem(itemID model.ItemID) (ItemUpdate, error) {
 	fmt.Printf("sync: requesting item %d\n", itemID)
-	resp, err := http.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", itemID))
+	resp, err := httpClient.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", itemID))
 	if err != nil {
 		return ItemUpdate{}, err
 	}
@@ -158,7 +156,7 @@ type ItemUpdate DataUpdate
 
 func requestUser(userID model.UserID) (UserUpdate, error) {
 	fmt.Printf("requesting user %s\n", userID)
-	resp, err := http.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/user/%s.json", userID))
+	resp, err := httpClient.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/user/%s.json", userID))
 	if err != nil {
 		return UserUpdate{}, err
 	}
@@ -196,58 +194,57 @@ func requestUserChan(userId model.UserID, ch chan UserUpdate, errCh chan model.U
 }
 
 func (s *Sync) itemRequesterInit() error {
-	go func() {
-		itemUpdateCh := make(chan ItemUpdate, 1)
-		errCh := make(chan model.ItemID, 1)
-		maxItemKnown := s.maxItemWritten
+	// go func() {
+	// 	itemUpdateCh := make(chan ItemUpdate, 1)
+	// 	errCh := make(chan model.ItemID, 1)
+	// 	maxItemKnown := s.maxItemWritten
 
-		updateRequestsInFlight := func() {
-			for i := s.maxItemWritten + 1; i <= maxItemKnown; i++ {
-				if len(itemTable) >= 10 {
-					break
-				}
-				if _, ok := itemTable[i]; ok {
-					continue
-				}
-				itemTable[i] = make(chan ItemUpdate, 1)
-				go requestItemChan(i, itemTable[i], errCh)
-			}
-		}
+	// 	updateRequestsInFlight := func() {
+	// 		for i := s.maxItemWritten + 1; i <= maxItemKnown; i++ {
+	// 			if len(itemTable) >= 10 {
+	// 				break
+	// 			}
+	// 			if _, ok := itemTable[i]; ok {
+	// 				continue
+	// 			}
+	// 			itemTable[i] = make(chan ItemUpdate, 1)
+	// 			go requestItemChan(i, itemTable[i], errCh)
+	// 		}
+	// 	}
 
-		for {
-			select {
-			case maxItemKnown = <-s.newMaxItemKnown:
-				updateRequestsInFlight()
-			case itemUpdate := <-itemTable[s.maxItemWritten+1]:
-				delete(itemTable, s.maxItemWritten+1)
-				err := s.csvWriter.Write([]string{
-					strconv.FormatInt(itemUpdate.RxTime.Unix(), 10),
-					string(itemUpdate.Data)},
-				)
-				if err != nil {
-					log.Fatalf("sync.itemRequesterInit: error writing item %d: %v\n", s.maxItemWritten+1, err)
-					continue
-				}
-				s.csvWriter.Flush()
-				err = s.csvWriter.Error()
-				if err != nil {
-					log.Fatalf("sync.itemRequesterInit: error flushing csv writer: %v\n", err)
-				}
-				s.maxItemWritten++
-				fmt.Printf("sync: wrote item %d\n", s.maxItemWritten)
-				updateRequestsInFlight()
-			case itemId := <-errCh:
-				fmt.Printf("sync: retrying item: %d\n", itemId)
-				go requestItemChan(itemId, itemTable[itemId], errCh)
-			}
-		}
-	}()
+	// 	for {
+	// 		select {
+	// 		case maxItemKnown = <-s.newMaxItemKnown:
+	// 			updateRequestsInFlight()
+	// 		case itemUpdate := <-itemTable[s.maxItemWritten+1]:
+	// 			delete(itemTable, s.maxItemWritten+1)
+	// 			err := s.csvWriter.Write([]string{
+	// 				strconv.FormatInt(itemUpdate.RxTime.Unix(), 10),
+	// 				string(itemUpdate.Data)},
+	// 			)
+	// 			if err != nil {
+	// 				log.Fatalf("sync.itemRequesterInit: error writing item %d: %v\n", s.maxItemWritten+1, err)
+	// 				continue
+	// 			}
+	// 			s.csvWriter.Flush()
+	// 			err = s.csvWriter.Error()
+	// 			if err != nil {
+	// 				log.Fatalf("sync.itemRequesterInit: error flushing csv writer: %v\n", err)
+	// 			}
+	// 			s.maxItemWritten++
+	// 			fmt.Printf("sync: wrote item %d\n", s.maxItemWritten)
+	// 			updateRequestsInFlight()
+	// 		case itemId := <-errCh:
+	// 			fmt.Printf("sync: retrying item: %d\n", itemId)
+	// 			go requestItemChan(itemId, itemTable[itemId], errCh)
+	// 		}
+	// 	}
+	// }()
 	return nil
 }
 
 func (s *Sync) maxItemListenerInit() error {
 	client := sse.NewClient("https://hacker-news.firebaseio.com/v0/maxitem.json")
-	client.Headers
 	client.OnConnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE maxitem connected")
 	})
