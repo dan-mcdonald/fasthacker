@@ -257,7 +257,12 @@ func (s *Sync) Run() error {
 	s.notifyUpdatedItems = make(chan []model.ItemID, 1)
 	s.notifyItem = make(chan ItemUpdate, 1)
 
-	go s.eventLogManager()
+	go func() {
+		err := s.eventLogManager()
+		if err != nil {
+			log.Fatalf("sync.Run: error in eventLogManager: %v\n", err)
+		}
+	}()
 
 	for i := 0; i < 10; i++ {
 		go s.getterWorker()
