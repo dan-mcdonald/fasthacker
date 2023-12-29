@@ -2,23 +2,26 @@ package sync
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
-	"os"
 	"time"
 
+	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 	sse "github.com/r3labs/sse/v2"
 )
 
 type Sync struct {
-	DBPath          string
-	maxItemWritten  model.ItemID
-	newMaxItemKnown chan model.ItemID
-	csvWriter       *csv.Writer
+	DBPath               string
+	itemSeen             chan model.ItemID
+	notifyUpdatedItems   chan []model.ItemID
+	notifyUpdatedUsers   chan []model.UserID
+	eventLog             *eventlog.EventLog
+	neededItemsWorkQueue chan model.ItemID
+	notifyItem           chan ItemUpdate
 }
 
 type FasthackerTransport struct{}
@@ -54,7 +57,7 @@ func (s *Sync) handleMaxItemEvent(msg *sse.Event) {
 			fmt.Printf("sync.handleMessage: error decoding maxitem put data: %v", err)
 		}
 		fmt.Printf("sync: new maxitem value %d\n", maxitemPutData.MaxItem)
-		s.newMaxItemKnown <- maxitemPutData.MaxItem
+		s.itemSeen <- maxitemPutData.MaxItem
 	case "keep-alive":
 		break
 	default:
@@ -77,12 +80,8 @@ func (s *Sync) handleUpdateEvent(msg *sse.Event) {
 			fmt.Printf("sync.handleUpdateEvent: error decoding update put data: %v", err)
 		}
 		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutData.ItemIDs), len(updatePutData.UserIDs))
-		for _, itemId := range updatePutData.ItemIDs {
-			go requestItemChan(itemId, nil, nil)
-		}
-		for _, userId := range updatePutData.UserIDs {
-			go requestUserChan(userId, nil, nil)
-		}
+		s.notifyUpdatedItems <- updatePutData.ItemIDs
+		s.notifyUpdatedUsers <- updatePutData.UserIDs
 	case "keep-alive":
 		break
 	default:
@@ -92,39 +91,6 @@ func (s *Sync) handleUpdateEvent(msg *sse.Event) {
 
 type MinimalItem struct {
 	ID model.ItemID `json:"id"`
-}
-
-func (s *Sync) dbInit() error {
-	fileHandle, err := os.OpenFile(s.DBPath, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return err
-	}
-	csvReader := csv.NewReader(fileHandle)
-	csvReader.FieldsPerRecord = 1
-	csvReader.ReuseRecord = true
-	rowNumber := model.ItemID(0)
-	for {
-		rowNumber++
-		record, err := csvReader.Read()
-		if err == io.EOF {
-			rowNumber--
-			break
-		}
-		if err != nil {
-			return err
-		}
-		jsonDecoder := json.NewDecoder(bytes.NewReader([]byte(record[0])))
-		var minimalItem MinimalItem
-		if err := jsonDecoder.Decode(&minimalItem); err != nil {
-			return err
-		}
-		if minimalItem.ID != rowNumber {
-			return fmt.Errorf("sync.dbInit: item at row %d ID was unexpected: %s", rowNumber, record[0])
-		}
-	}
-	s.maxItemWritten = model.ItemID(rowNumber)
-	s.csvWriter = csv.NewWriter(fileHandle)
-	return nil
 }
 
 func requestItem(itemID model.ItemID) (ItemUpdate, error) {
@@ -142,17 +108,19 @@ func requestItem(itemID model.ItemID) (ItemUpdate, error) {
 	}
 	return ItemUpdate{
 		RxTime: rxTime,
+		ID:     itemID,
 		Data:   buf.Bytes(),
 	}, nil
 }
 
-type DataUpdate struct {
+type DataUpdate[T comparable] struct {
 	RxTime time.Time
+	ID     T
 	Data   []byte
 }
 
-type UserUpdate DataUpdate
-type ItemUpdate DataUpdate
+type UserUpdate DataUpdate[model.UserID]
+type ItemUpdate DataUpdate[model.ItemID]
 
 func requestUser(userID model.UserID) (UserUpdate, error) {
 	fmt.Printf("requesting user %s\n", userID)
@@ -169,81 +137,12 @@ func requestUser(userID model.UserID) (UserUpdate, error) {
 	}
 	return UserUpdate{
 		RxTime: rxTime,
+		ID:     userID,
 		Data:   buf.Bytes(),
 	}, nil
 }
 
-func requestItemChan(itemId model.ItemID, ch chan ItemUpdate, errCh chan model.ItemID) {
-	itemData, err := requestItem(itemId)
-	if err != nil {
-		fmt.Printf("sync.requestItemChan: error requesting item %d: %v\n", itemId, err)
-		errCh <- itemId
-		return
-	}
-	ch <- itemData
-}
-
-func requestUserChan(userId model.UserID, ch chan UserUpdate, errCh chan model.UserID) {
-	itemData, err := requestUser(userId)
-	if err != nil {
-		fmt.Printf("error requesting item %s: %v\n", userId, err)
-		errCh <- userId
-		return
-	}
-	ch <- itemData
-}
-
-func (s *Sync) itemRequesterInit() error {
-	// go func() {
-	// 	itemUpdateCh := make(chan ItemUpdate, 1)
-	// 	errCh := make(chan model.ItemID, 1)
-	// 	maxItemKnown := s.maxItemWritten
-
-	// 	updateRequestsInFlight := func() {
-	// 		for i := s.maxItemWritten + 1; i <= maxItemKnown; i++ {
-	// 			if len(itemTable) >= 10 {
-	// 				break
-	// 			}
-	// 			if _, ok := itemTable[i]; ok {
-	// 				continue
-	// 			}
-	// 			itemTable[i] = make(chan ItemUpdate, 1)
-	// 			go requestItemChan(i, itemTable[i], errCh)
-	// 		}
-	// 	}
-
-	// 	for {
-	// 		select {
-	// 		case maxItemKnown = <-s.newMaxItemKnown:
-	// 			updateRequestsInFlight()
-	// 		case itemUpdate := <-itemTable[s.maxItemWritten+1]:
-	// 			delete(itemTable, s.maxItemWritten+1)
-	// 			err := s.csvWriter.Write([]string{
-	// 				strconv.FormatInt(itemUpdate.RxTime.Unix(), 10),
-	// 				string(itemUpdate.Data)},
-	// 			)
-	// 			if err != nil {
-	// 				log.Fatalf("sync.itemRequesterInit: error writing item %d: %v\n", s.maxItemWritten+1, err)
-	// 				continue
-	// 			}
-	// 			s.csvWriter.Flush()
-	// 			err = s.csvWriter.Error()
-	// 			if err != nil {
-	// 				log.Fatalf("sync.itemRequesterInit: error flushing csv writer: %v\n", err)
-	// 			}
-	// 			s.maxItemWritten++
-	// 			fmt.Printf("sync: wrote item %d\n", s.maxItemWritten)
-	// 			updateRequestsInFlight()
-	// 		case itemId := <-errCh:
-	// 			fmt.Printf("sync: retrying item: %d\n", itemId)
-	// 			go requestItemChan(itemId, itemTable[itemId], errCh)
-	// 		}
-	// 	}
-	// }()
-	return nil
-}
-
-func (s *Sync) maxItemListenerInit() error {
+func (s *Sync) maxItemNotifierStart() error {
 	client := sse.NewClient("https://hacker-news.firebaseio.com/v0/maxitem.json")
 	client.OnConnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE maxitem connected")
@@ -267,27 +166,110 @@ func (s *Sync) updateListenerInit() error {
 	return nil
 }
 
+func (s *Sync) neededItemsQueueManager() {
+	actualMaxItemID := model.ItemID(1)
+	neededItems := IntQueue[model.ItemID]{}
+	for {
+		nextItem, ok := neededItems.Pop()
+		if !ok {
+			lastItemSeen := <-s.itemSeen
+			if lastItemSeen > actualMaxItemID {
+				oldMaxItemID := actualMaxItemID
+				actualMaxItemID = lastItemSeen
+				neededItems.Enqueue(oldMaxItemID+1, actualMaxItemID)
+			}
+		} else {
+			select {
+			case candidateMaxItem := <-s.itemSeen:
+				if candidateMaxItem > actualMaxItemID {
+					oldMaxItemID := actualMaxItemID
+					actualMaxItemID = candidateMaxItem
+					neededItems.Enqueue(oldMaxItemID+1, actualMaxItemID)
+				}
+			case s.neededItemsWorkQueue <- nextItem:
+				break
+			}
+		}
+	}
+}
+
+func (s *Sync) getterWorker() {
+	for {
+		itemID := <-s.neededItemsWorkQueue
+		itemUpdate, err := requestItem(itemID)
+		if err != nil {
+			log.Fatalf("sync.getterWorker: error requesting item %d: %v\n", itemID, err)
+		}
+		s.notifyItem <- itemUpdate
+	}
+}
+
+func (s *Sync) eventLogManager() error {
+	var err error
+	s.eventLog, err = eventlog.NewEventLog(s.DBPath)
+	if err != nil {
+		return err
+	}
+	defer s.eventLog.Close()
+	for {
+		event, err := s.eventLog.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch event.EventType {
+		case eventlog.TypeItem:
+			var item model.Item
+			err = json.Unmarshal(event.Data, &item)
+			if err != nil {
+				return err
+			}
+			s.itemSeen <- item.ID
+		case eventlog.TypeUser:
+			panic("todo handle user object")
+		default:
+			log.Fatalf("unknown event type: %s", event.EventType)
+		}
+	}
+	fmt.Println("sync: db initialized")
+
+	for {
+		itemUpdate := <-s.notifyItem
+		s.itemSeen <- itemUpdate.ID
+		err := s.eventLog.Write(eventlog.Event{
+			RxTime:    itemUpdate.RxTime,
+			EventType: eventlog.TypeItem,
+			Data:      itemUpdate.Data,
+		})
+		if err != nil {
+			log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+		}
+	}
+
+}
+
 // Run runs the sync.
 func (s *Sync) Run() error {
-	s.newMaxItemKnown = make(chan model.ItemID, 1)
+	s.itemSeen = make(chan model.ItemID, 1)
+	go s.neededItemsQueueManager()
+	s.notifyUpdatedItems = make(chan []model.ItemID, 1)
+	s.notifyItem = make(chan ItemUpdate, 1)
 
-	err := s.dbInit()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("sync: db initialized, max item written: %d\n", s.maxItemWritten)
+	go s.eventLogManager()
 
-	err = s.itemRequesterInit()
-	if err != nil {
-		return err
+	for i := 0; i < 10; i++ {
+		go s.getterWorker()
 	}
 
-	err = s.maxItemListenerInit()
-	if err != nil {
-		return err
-	}
-
+	var err error
 	err = s.updateListenerInit()
+	if err != nil {
+		return err
+	}
+
+	err = s.maxItemNotifierStart()
 	if err != nil {
 		return err
 	}
