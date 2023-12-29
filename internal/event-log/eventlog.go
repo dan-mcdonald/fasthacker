@@ -46,7 +46,7 @@ func (e *EventLog) Close() error {
 }
 
 func NewEventLog(path string) (*EventLog, error) {
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
