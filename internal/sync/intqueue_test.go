@@ -10,17 +10,17 @@ func TestIntQueueRemoveMiddle(t *testing.T) {
 	q.Remove(5)
 	expected := []int{1, 2, 3, 4, 6, 7, 8, 9, 10}
 	for _, v := range expected {
-		x, err := q.Dequeue()
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
+		x, ok := q.Pop()
+		if !ok {
+			t.Errorf("queue unexpectedly empty")
 		}
 		if x != v {
 			t.Errorf("expected %d, got %d", v, x)
 		}
 	}
-	_, err := q.Dequeue()
-	if err == nil {
-		t.Errorf("expected error, got none")
+	_, ok := q.Pop()
+	if ok {
+		t.Errorf("expected queue empty, got not empty")
 	}
 }
 
@@ -30,17 +30,17 @@ func TestIntQueueRemoveHead(t *testing.T) {
 	q.Remove(1)
 	expected := []int{2, 3, 4, 5, 6, 7, 8, 9, 10}
 	for _, v := range expected {
-		x, err := q.Dequeue()
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
+		x, ok := q.Pop()
+		if !ok {
+			t.Errorf("queue unexpectedly empty")
 		}
 		if x != v {
 			t.Errorf("expected %d, got %d", v, x)
 		}
 	}
-	_, err := q.Dequeue()
-	if err == nil {
-		t.Errorf("expected error, got none")
+	_, ok := q.Pop()
+	if ok {
+		t.Errorf("expected queue empty, got not empty")
 	}
 }
 
@@ -50,17 +50,17 @@ func TestIntQueueRemoveTail(t *testing.T) {
 	q.Remove(10)
 	expected := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	for _, v := range expected {
-		x, err := q.Dequeue()
-		if err != nil {
-			t.Errorf("expected no error, got %v", err)
+		x, ok := q.Pop()
+		if !ok {
+			t.Errorf("queue unexpectedly empty")
 		}
 		if x != v {
 			t.Errorf("expected %d, got %d", v, x)
 		}
 	}
-	_, err := q.Dequeue()
-	if err == nil {
-		t.Errorf("expected error, got none")
+	_, ok := q.Pop()
+	if ok {
+		t.Errorf("expected queue empty, got not empty")
 	}
 }
 
@@ -68,17 +68,38 @@ func TestIntQueueRemove1Span(t *testing.T) {
 	q := IntQueue[int]{}
 	q.Enqueue(1, 1)
 	q.Remove(1)
-	_, err := q.Dequeue()
-	if err == nil {
-		t.Errorf("expected error, got none")
+	_, ok := q.Pop()
+	if ok {
+		t.Errorf("expected queue empty, got not empty")
 	}
 }
 
 func TestIntQueueRemoveInvalid(t *testing.T) {
 	q := IntQueue[int]{}
 	q.Enqueue(1, 9)
-	err := q.Remove(10)
-	if err == nil {
-		t.Errorf("expected error, got none")
+	ok := q.Remove(10)
+	if ok {
+		t.Errorf("expected remove to fail")
+	}
+}
+
+func TestEnqueueOutOfOrder(t *testing.T) {
+	q := IntQueue[int]{}
+	q.Enqueue(6, 10)
+	q.Enqueue(1, 4)
+	q.Enqueue(11, 12)
+	expected := []int{1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12}
+	for _, v := range expected {
+		x, ok := q.Pop()
+		if !ok {
+			t.Errorf("queue unexpectedly empty")
+		}
+		if x != v {
+			t.Errorf("expected %d, got %d", v, x)
+		}
+	}
+	_, ok := q.Pop()
+	if ok {
+		t.Errorf("expected queue empty, got not empty")
 	}
 }

@@ -1,8 +1,6 @@
 package sync
 
 import (
-	"errors"
-
 	"golang.org/x/exp/constraints"
 )
 
@@ -18,9 +16,9 @@ func (q *IntQueue[T]) Enqueue(lower, upper T) {
 	q.spans = append(q.spans, intSpan[T]{lower, upper})
 }
 
-func (q *IntQueue[T]) Dequeue() (T, error) {
+func (q *IntQueue[T]) Pop() (T, bool) {
 	if len(q.spans) == 0 {
-		return 0, errors.New("queue is empty")
+		return 0, false
 	}
 	span := q.spans[0]
 	v := span.lower
@@ -29,10 +27,10 @@ func (q *IntQueue[T]) Dequeue() (T, error) {
 	} else {
 		q.spans[0].lower++
 	}
-	return v, nil
+	return v, true
 }
 
-func (q *IntQueue[T]) Remove(v T) error {
+func (q *IntQueue[T]) Remove(v T) bool {
 	for i, span := range q.spans {
 		if span.lower <= v && v <= span.upper {
 			if span.lower == span.upper {
@@ -46,8 +44,8 @@ func (q *IntQueue[T]) Remove(v T) error {
 					q.spans = append(q.spans[:i], append([]intSpan[T]{{span.lower, v - 1}, {v + 1, span.upper}}, q.spans[i+1:]...)...)
 				}
 			}
-			return nil
+			return true
 		}
 	}
-	return errors.New("value not found in queue")
+	return false
 }
