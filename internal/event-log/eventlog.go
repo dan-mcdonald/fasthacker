@@ -2,7 +2,7 @@ package eventlog
 
 // Interface for reading and writing events to a CSV log
 // The CSV log has the following format:
-// unix seconds, unix nanoseconds, event type, event data (JSON)
+// unix_nanoseconds, event_type, data
 // The CSV log is append-only
 // The CSV log is not thread-safe
 
@@ -45,6 +45,13 @@ func (e *EventLog) Close() error {
 	return e.file.Close()
 }
 
+const (
+	fieldTimeNs    = iota
+	fieldEventType = iota
+	fieldData      = iota
+	fieldCount     = iota
+)
+
 func NewEventLog(path string) (*EventLog, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
@@ -52,7 +59,7 @@ func NewEventLog(path string) (*EventLog, error) {
 	}
 
 	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = 4
+	reader.FieldsPerRecord = fieldCount
 	reader.ReuseRecord = true
 
 	return &EventLog{
@@ -75,18 +82,14 @@ func (e *EventLog) Read() (Event, error) {
 		}
 		return Event{}, err
 	}
-	unixSecs, err := strconv.ParseInt(record[0], 10, 64)
+	unixNs, err := strconv.ParseInt(record[fieldTimeNs], 10, 64)
 	if err != nil {
-		return Event{}, fmt.Errorf("eventlog.Read: error parsing first column (unix seconds): %w", err)
-	}
-	unixNs, err := strconv.ParseInt(record[1], 10, 64)
-	if err != nil {
-		return Event{}, fmt.Errorf("eventlog.Read: error parsing second column (unix nanoseconds): %w", err)
+		return Event{}, fmt.Errorf("eventlog.Read: error parsing value '%s' as unix nanoseconds: %w", record[fieldTimeNs], err)
 	}
 	return Event{
-		RxTime:    time.Unix(unixSecs, unixNs),
-		EventType: EventType(record[2]),
-		Data:      []byte(record[3]),
+		RxTime:    time.Unix(0, unixNs),
+		EventType: EventType(record[fieldEventType]),
+		Data:      []byte(record[fieldData]),
 	}, nil
 }
 
