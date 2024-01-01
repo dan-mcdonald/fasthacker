@@ -17,8 +17,6 @@ import (
 type Sync struct {
 	DBPath               string
 	itemSeen             chan model.ItemID
-	notifyUpdatedItems   chan []model.ItemID
-	notifyUpdatedUsers   chan []model.UserID
 	eventLog             *eventlog.EventLog
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan ItemUpdate
@@ -65,9 +63,12 @@ func (s *Sync) handleMaxItemEvent(msg *sse.Event) {
 	}
 }
 
-type UpdatePutData struct {
-	ItemIDs []model.ItemID `json:"items"`
-	UserIDs []model.UserID `json:"profiles"`
+type UpdatePutMessage struct {
+	Path string `json:"path"`
+	Data struct {
+		ItemIDs []model.ItemID `json:"items"`
+		UserIDs []model.UserID `json:"profiles"`
+	} `json:"data"`
 }
 
 func (s *Sync) handleUpdateEvent(msg *sse.Event) {
@@ -75,13 +76,15 @@ func (s *Sync) handleUpdateEvent(msg *sse.Event) {
 	switch msgEvent {
 	case "put":
 		jsonDecoder := json.NewDecoder(bytes.NewReader(msg.Data))
-		var updatePutData UpdatePutData
-		if err := jsonDecoder.Decode(&updatePutData); err != nil {
+		var updatePutMsg UpdatePutMessage
+		if err := jsonDecoder.Decode(&updatePutMsg); err != nil {
 			fmt.Printf("sync.handleUpdateEvent: error decoding update put data: %v", err)
 		}
-		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutData.ItemIDs), len(updatePutData.UserIDs))
-		s.notifyUpdatedItems <- updatePutData.ItemIDs
-		s.notifyUpdatedUsers <- updatePutData.UserIDs
+		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutMsg.Data.ItemIDs), len(updatePutMsg.Data.UserIDs))
+		for _, itemID := range updatePutMsg.Data.ItemIDs {
+			s.itemSeen <- itemID
+		}
+		// TODO handle profiles
 	case "keep-alive":
 		break
 	default:
@@ -250,11 +253,11 @@ func (s *Sync) eventLogManager() error {
 
 }
 
-// Run runs the sync.
-func (s *Sync) Run() error {
+// Start runs the sync.
+func (s *Sync) Start() error {
 	s.itemSeen = make(chan model.ItemID, 1)
+	s.neededItemsWorkQueue = make(chan model.ItemID, 1)
 	go s.neededItemsQueueManager()
-	s.notifyUpdatedItems = make(chan []model.ItemID, 1)
 	s.notifyItem = make(chan ItemUpdate, 1)
 
 	go func() {

@@ -13,7 +13,7 @@ func main() {
 	chInterrupt := make(chan os.Signal, 1)
 	signal.Notify(chInterrupt, os.Interrupt)
 	synk := sync.Sync{DBPath: "hacker.db"}
-	go synk.Run()
+	go synk.Start()
 	<-chInterrupt
 	fmt.Println("interrupt received")
 }
