@@ -49,6 +49,7 @@ const (
 	fieldTimeNs    = iota
 	fieldEventType = iota
 	fieldData      = iota
+	fieldEmpty     = iota
 	fieldCount     = iota
 )
 
@@ -102,13 +103,9 @@ func (e *EventLog) Write(event Event) error {
 	if !e.fullyRead {
 		return errors.New("eventlog.Write: log not fully read")
 	}
-	unixSecs := event.RxTime.Unix()
-	unixNs := event.RxTime.UnixNano()
-	record := []string{
-		strconv.FormatInt(unixSecs, 10),
-		strconv.FormatInt(unixNs, 10),
-		string(event.EventType),
-		string(event.Data),
-	}
+	record := make([]string, fieldCount)
+	record[fieldTimeNs] = strconv.FormatInt(event.RxTime.UnixNano(), 10)
+	record[fieldEventType] = string(event.EventType)
+	record[fieldData] = string(event.Data)
 	return e.csvWriter.Write(record)
 }

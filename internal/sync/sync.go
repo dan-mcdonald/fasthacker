@@ -171,26 +171,34 @@ func (s *Sync) updateListenerInit() error {
 
 func (s *Sync) neededItemsQueueManager() {
 	actualMaxItemID := model.ItemID(1)
-	neededItems := IntQueue[model.ItemID]{}
+	neededItems := make(map[model.ItemID]struct{})
 	for {
-		nextItem, ok := neededItems.Pop()
-		if !ok {
+		if len(neededItems) == 0 {
 			lastItemSeen := <-s.itemSeen
 			if lastItemSeen > actualMaxItemID {
 				oldMaxItemID := actualMaxItemID
 				actualMaxItemID = lastItemSeen
-				neededItems.Enqueue(oldMaxItemID+1, actualMaxItemID)
+				for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
+					neededItems[i] = struct{}{}
+				}
 			}
 		} else {
+			var nextItem model.ItemID
+			for itemID := range neededItems {
+				nextItem = itemID
+				break
+			}
 			select {
 			case candidateMaxItem := <-s.itemSeen:
 				if candidateMaxItem > actualMaxItemID {
 					oldMaxItemID := actualMaxItemID
 					actualMaxItemID = candidateMaxItem
-					neededItems.Enqueue(oldMaxItemID+1, actualMaxItemID)
+					for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
+						neededItems[i] = struct{}{}
+					}
 				}
 			case s.neededItemsWorkQueue <- nextItem:
-				break
+				delete(neededItems, nextItem)
 			}
 		}
 	}
@@ -253,12 +261,14 @@ func (s *Sync) eventLogManager() error {
 
 }
 
+const worker_count = 100
+
 // Start runs the sync.
 func (s *Sync) Start() error {
-	s.itemSeen = make(chan model.ItemID, 1)
-	s.neededItemsWorkQueue = make(chan model.ItemID, 1)
+	s.itemSeen = make(chan model.ItemID, worker_count)
+	s.neededItemsWorkQueue = make(chan model.ItemID, worker_count)
 	go s.neededItemsQueueManager()
-	s.notifyItem = make(chan ItemUpdate, 1)
+	s.notifyItem = make(chan ItemUpdate, worker_count)
 
 	go func() {
 		err := s.eventLogManager()
@@ -267,7 +277,7 @@ func (s *Sync) Start() error {
 		}
 	}()
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < worker_count; i++ {
 		go s.getterWorker()
 	}
 
