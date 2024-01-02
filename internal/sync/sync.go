@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"time"
@@ -222,14 +221,7 @@ func (s *Sync) eventLogManager() error {
 		return err
 	}
 	defer s.eventLog.Close()
-	for {
-		event, err := s.eventLog.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
+	for event := range s.eventLog.Stream() {
 		switch event.EventType {
 		case eventlog.TypeItem:
 			var item model.Item

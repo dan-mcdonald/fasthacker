@@ -7,13 +7,11 @@ package eventlog
 // The CSV log is not thread-safe
 
 import (
-	"encoding/csv"
-	"errors"
-	"fmt"
-	"io"
-	"os"
-	"strconv"
 	"time"
+
+	_ "github.com/ncruces/go-sqlite3/embed"
+	"github.com/ncruces/go-sqlite3/gormlite"
+	"gorm.io/gorm"
 )
 
 type EventType string
@@ -30,82 +28,62 @@ type Event struct {
 }
 
 type EventLog struct {
-	file      *os.File
-	csvReader *csv.Reader
-	csvWriter *csv.Writer
-	fullyRead bool
+	db *gorm.DB
 }
 
 func (e *EventLog) Close() error {
-	e.csvWriter.Flush()
-	if err := e.csvWriter.Error(); err != nil {
-		e.file.Close()
+	db, err := e.db.DB()
+	if err != nil {
 		return err
 	}
-	return e.file.Close()
+	return db.Close()
 }
 
-const (
-	fieldTimeNs    = iota
-	fieldEventType = iota
-	fieldData      = iota
-	fieldEmpty     = iota
-	fieldCount     = iota
-)
+type eventRecord struct {
+	gorm.Model
+	RxTime    time.Time
+	EventType EventType
+	Data      []byte
+}
 
+// NewEventLog creates a new event log
 func NewEventLog(path string) (*EventLog, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	db, err := gorm.Open(gormlite.Open(path), &gorm.Config{})
 	if err != nil {
 		return nil, err
 	}
 
-	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = fieldCount
-	reader.ReuseRecord = true
+	db.AutoMigrate(&eventRecord{})
 
 	return &EventLog{
-		file:      file,
-		csvReader: reader,
-		csvWriter: csv.NewWriter(file),
-		fullyRead: false,
+		db: db,
 	}, nil
 }
 
-// Read an event from the log
-func (e *EventLog) Read() (Event, error) {
-	if e.fullyRead {
-		return Event{}, errors.New("eventlog.Read: log already fully read")
-	}
-	record, err := e.csvReader.Read()
-	if err != nil {
-		if err == io.EOF {
-			e.fullyRead = true
-		}
-		return Event{}, err
-	}
-	unixNs, err := strconv.ParseInt(record[fieldTimeNs], 10, 64)
-	if err != nil {
-		return Event{}, fmt.Errorf("eventlog.Read: error parsing value '%s' as unix nanoseconds: %w", record[fieldTimeNs], err)
-	}
-	return Event{
-		RxTime:    time.Unix(0, unixNs),
-		EventType: EventType(record[fieldEventType]),
-		Data:      []byte(record[fieldData]),
-	}, nil
-}
-
-func (e *EventLog) FullyRead() bool {
-	return e.fullyRead
+func (e *EventLog) Stream() chan Event {
+	ch := make(chan Event, 100)
+	go func() {
+		defer close(ch)
+		var records []eventRecord
+		e.db.FindInBatches(&records, 100, func(tx *gorm.DB, batch int) error {
+			for _, record := range records {
+				ch <- Event{
+					RxTime:    record.RxTime,
+					EventType: record.EventType,
+					Data:      record.Data,
+				}
+			}
+			return nil
+		})
+	}()
+	return ch
 }
 
 // Write an event to the log
 func (e *EventLog) Write(event Event) error {
-	if !e.fullyRead {
-		return errors.New("eventlog.Write: log not fully read")
-	}
-	record := make([]string, fieldCount)
-	record[fieldTimeNs] = strconv.FormatInt(event.RxTime.UnixNano(), 10)
-	record[fieldEventType] = string(event.EventType)
-	record[fieldData] = string(event.Data)
-	return e.csvWriter.Write(record)
+	return e.db.Create(&eventRecord{
+		RxTime:    event.RxTime,
+		EventType: event.EventType,
+		Data:      event.Data,
+	}).Error
 }
