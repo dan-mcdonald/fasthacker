@@ -39,13 +39,6 @@ func (e *EventLog) Close() error {
 	return db.Close()
 }
 
-type eventRecord struct {
-	gorm.Model
-	RxTime    time.Time
-	EventType EventType
-	Data      []byte
-}
-
 // NewEventLog creates a new event log
 func NewEventLog(path string) (*EventLog, error) {
 	db, err := gorm.Open(gormlite.Open(path), &gorm.Config{})
@@ -53,7 +46,7 @@ func NewEventLog(path string) (*EventLog, error) {
 		return nil, err
 	}
 
-	db.AutoMigrate(&eventRecord{})
+	db.AutoMigrate(&Event{})
 
 	return &EventLog{
 		db: db,
@@ -64,9 +57,9 @@ func (e *EventLog) Stream() chan Event {
 	ch := make(chan Event, 100)
 	go func() {
 		defer close(ch)
-		var records []eventRecord
-		e.db.FindInBatches(&records, 100, func(tx *gorm.DB, batch int) error {
-			for _, record := range records {
+		var batch []Event
+		e.db.FindInBatches(&batch, 100, func(tx *gorm.DB, _ int) error {
+			for _, record := range batch {
 				ch <- Event{
 					RxTime:    record.RxTime,
 					EventType: record.EventType,
@@ -81,9 +74,5 @@ func (e *EventLog) Stream() chan Event {
 
 // Write an event to the log
 func (e *EventLog) Write(event Event) error {
-	return e.db.Create(&eventRecord{
-		RxTime:    event.RxTime,
-		EventType: event.EventType,
-		Data:      event.Data,
-	}).Error
+	return e.db.Create(event).Error
 }

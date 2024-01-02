@@ -10,15 +10,23 @@ import (
 
 	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
+	"github.com/hashicorp/go-metrics"
 	sse "github.com/r3labs/sse/v2"
 )
 
 type Sync struct {
-	DBPath               string
+	dbPath               string
+	sink                 metrics.MetricSink
 	itemSeen             chan model.ItemID
-	eventLog             *eventlog.EventLog
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan ItemUpdate
+}
+
+func NewSync(dbPath string, sink metrics.MetricSink) *Sync {
+	return &Sync{
+		dbPath: dbPath,
+		sink:   sink,
+	}
 }
 
 type FasthackerTransport struct{}
@@ -96,7 +104,6 @@ type MinimalItem struct {
 }
 
 func requestItem(itemID model.ItemID) (ItemUpdate, error) {
-	fmt.Printf("sync: requesting item %d\n", itemID)
 	resp, err := httpClient.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", itemID))
 	if err != nil {
 		return ItemUpdate{}, err
@@ -204,24 +211,23 @@ func (s *Sync) neededItemsQueueManager() {
 }
 
 func (s *Sync) getterWorker() {
-	for {
-		itemID := <-s.neededItemsWorkQueue
+	for itemID := range s.neededItemsWorkQueue {
+		reqStart := time.Now()
 		itemUpdate, err := requestItem(itemID)
 		if err != nil {
 			log.Fatalf("sync.getterWorker: error requesting item %d: %v\n", itemID, err)
 		}
+		s.sink.AddSample([]string{"request_item"}, float32(time.Since(reqStart).Milliseconds()))
 		s.notifyItem <- itemUpdate
 	}
 }
 
-func (s *Sync) eventLogManager() error {
-	var err error
-	s.eventLog, err = eventlog.NewEventLog(s.DBPath)
+func (s *Sync) startEventLogManager() error {
+	eventLog, err := eventlog.NewEventLog(s.dbPath)
 	if err != nil {
 		return err
 	}
-	defer s.eventLog.Close()
-	for event := range s.eventLog.Stream() {
+	for event := range eventLog.Stream() {
 		switch event.EventType {
 		case eventlog.TypeItem:
 			var item model.Item
@@ -238,19 +244,21 @@ func (s *Sync) eventLogManager() error {
 	}
 	fmt.Println("sync: db initialized")
 
-	for {
-		itemUpdate := <-s.notifyItem
-		s.itemSeen <- itemUpdate.ID
-		err := s.eventLog.Write(eventlog.Event{
-			RxTime:    itemUpdate.RxTime,
-			EventType: eventlog.TypeItem,
-			Data:      itemUpdate.Data,
-		})
-		if err != nil {
-			log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+	go func() {
+		defer eventLog.Close()
+		for itemUpdate := range s.notifyItem {
+			s.itemSeen <- itemUpdate.ID
+			err := eventLog.Write(eventlog.Event{
+				RxTime:    itemUpdate.RxTime,
+				EventType: eventlog.TypeItem,
+				Data:      itemUpdate.Data,
+			})
+			if err != nil {
+				log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+			}
 		}
-	}
-
+	}()
+	return nil
 }
 
 const worker_count = 100
@@ -262,18 +270,17 @@ func (s *Sync) Start() error {
 	go s.neededItemsQueueManager()
 	s.notifyItem = make(chan ItemUpdate, worker_count)
 
-	go func() {
-		err := s.eventLogManager()
-		if err != nil {
-			log.Fatalf("sync.Run: error in eventLogManager: %v\n", err)
-		}
-	}()
+	var err error
+
+	err = s.startEventLogManager()
+	if err != nil {
+		log.Fatalf("sync.Run: error starting event log manager: %v\n", err)
+	}
 
 	for i := 0; i < worker_count; i++ {
 		go s.getterWorker()
 	}
 
-	var err error
 	err = s.updateListenerInit()
 	if err != nil {
 		return err
