@@ -10,22 +10,81 @@ import (
 
 	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
-	"github.com/hashicorp/go-metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	sse "github.com/r3labs/sse/v2"
 )
 
+type metrics struct {
+	ItemsSeen       prometheus.Counter
+	ItemsGotten     prometheus.Counter
+	ItemsNeeded     prometheus.Gauge
+	ItemsGetLatency prometheus.Histogram
+	ItemsGetSize    prometheus.Histogram
+	ItemsGetStatus  prometheus.CounterVec
+	logWriteLatency prometheus.Histogram
+}
+
+func newSyncMetrics() *metrics {
+	m := &metrics{
+		ItemsSeen: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "fasthacker_items_seen",
+			Help: "Number of items seen",
+		}),
+		ItemsGotten: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "fasthacker_items_gotten",
+			Help: "Number of items gotten",
+		}),
+		ItemsNeeded: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "fasthacker_items_needed",
+			Help: "Number of items needed",
+		}),
+		ItemsGetLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "fasthacker_items_get_latency",
+			Help: "Latency of items gotten",
+		}),
+		ItemsGetSize: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "fasthacker_items_get_size",
+			Help: "Size of items gotten",
+			Buckets: []float64{
+				100,
+				1000,
+				10000,
+				100000,
+			},
+		}),
+		ItemsGetStatus: *prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "fasthacker_items_get_status",
+			Help: "Status of items gotten",
+		}, []string{"status"}),
+		logWriteLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "fasthacker_log_write_latency",
+			Help: "Latency of log writes",
+		}),
+	}
+	prometheus.MustRegister(m.ItemsSeen)
+	prometheus.MustRegister(m.ItemsGotten)
+	prometheus.MustRegister(m.ItemsNeeded)
+	prometheus.MustRegister(m.ItemsGetLatency)
+	prometheus.MustRegister(m.ItemsGetSize)
+	prometheus.MustRegister(m.ItemsGetStatus)
+	prometheus.MustRegister(m.logWriteLatency)
+
+	return m
+}
+
 type Sync struct {
 	dbPath               string
-	sink                 metrics.MetricSink
+	metrics              *metrics
 	itemSeen             chan model.ItemID
+	itemFound            chan model.ItemID
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan ItemUpdate
 }
 
-func NewSync(dbPath string, sink metrics.MetricSink) *Sync {
+func NewSync(dbPath string) *Sync {
 	return &Sync{
-		dbPath: dbPath,
-		sink:   sink,
+		dbPath:  dbPath,
+		metrics: newSyncMetrics(),
 	}
 }
 
@@ -178,16 +237,23 @@ func (s *Sync) updateListenerInit() error {
 func (s *Sync) neededItemsQueueManager() {
 	actualMaxItemID := model.ItemID(1)
 	neededItems := make(map[model.ItemID]struct{})
+
+	handleItemSeen := func(candidateMaxItem model.ItemID) {
+		s.metrics.ItemsSeen.Inc()
+		if candidateMaxItem > actualMaxItemID {
+			oldMaxItemID := actualMaxItemID
+			actualMaxItemID = candidateMaxItem
+			for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
+				neededItems[i] = struct{}{}
+			}
+			s.metrics.ItemsNeeded.Set(float64(len(neededItems)))
+		}
+	}
+
 	for {
 		if len(neededItems) == 0 {
-			lastItemSeen := <-s.itemSeen
-			if lastItemSeen > actualMaxItemID {
-				oldMaxItemID := actualMaxItemID
-				actualMaxItemID = lastItemSeen
-				for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
-					neededItems[i] = struct{}{}
-				}
-			}
+			candidateMaxItem := <-s.itemSeen
+			handleItemSeen(candidateMaxItem)
 		} else {
 			var nextItem model.ItemID
 			for itemID := range neededItems {
@@ -196,15 +262,10 @@ func (s *Sync) neededItemsQueueManager() {
 			}
 			select {
 			case candidateMaxItem := <-s.itemSeen:
-				if candidateMaxItem > actualMaxItemID {
-					oldMaxItemID := actualMaxItemID
-					actualMaxItemID = candidateMaxItem
-					for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
-						neededItems[i] = struct{}{}
-					}
-				}
+				handleItemSeen(candidateMaxItem)
 			case s.neededItemsWorkQueue <- nextItem:
 				delete(neededItems, nextItem)
+				s.metrics.ItemsNeeded.Set(float64(len(neededItems)))
 			}
 		}
 	}
@@ -212,12 +273,16 @@ func (s *Sync) neededItemsQueueManager() {
 
 func (s *Sync) getterWorker() {
 	for itemID := range s.neededItemsWorkQueue {
-		reqStart := time.Now()
+		timer := prometheus.NewTimer(s.metrics.ItemsGetLatency)
 		itemUpdate, err := requestItem(itemID)
 		if err != nil {
+			s.metrics.ItemsGetStatus.WithLabelValues("error").Inc()
 			log.Fatalf("sync.getterWorker: error requesting item %d: %v\n", itemID, err)
 		}
-		s.sink.AddSample([]string{"request_item"}, float32(time.Since(reqStart).Milliseconds()))
+		s.metrics.ItemsGetStatus.WithLabelValues("ok").Inc()
+		s.metrics.ItemsGotten.Inc()
+		s.metrics.ItemsGetSize.Observe(float64(len(itemUpdate.Data)))
+		timer.ObserveDuration()
 		s.notifyItem <- itemUpdate
 	}
 }
@@ -227,6 +292,7 @@ func (s *Sync) startEventLogManager() error {
 	if err != nil {
 		return err
 	}
+	initCount := 0
 	for event := range eventLog.Stream() {
 		switch event.EventType {
 		case eventlog.TypeItem:
@@ -241,13 +307,15 @@ func (s *Sync) startEventLogManager() error {
 		default:
 			log.Fatalf("unknown event type: %s", event.EventType)
 		}
+		initCount++
 	}
-	fmt.Println("sync: db initialized")
+	fmt.Printf("sync: db initialized with %d items\n", initCount)
 
 	go func() {
 		defer eventLog.Close()
 		for itemUpdate := range s.notifyItem {
 			s.itemSeen <- itemUpdate.ID
+			timer := prometheus.NewTimer(s.metrics.logWriteLatency)
 			err := eventLog.Write(eventlog.Event{
 				RxTime:    itemUpdate.RxTime,
 				EventType: eventlog.TypeItem,
@@ -256,6 +324,7 @@ func (s *Sync) startEventLogManager() error {
 			if err != nil {
 				log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
 			}
+			timer.ObserveDuration()
 		}
 	}()
 	return nil

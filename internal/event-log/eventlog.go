@@ -7,6 +7,7 @@ package eventlog
 // The CSV log is not thread-safe
 
 import (
+	"log"
 	"time"
 
 	_ "github.com/ncruces/go-sqlite3/embed"
@@ -22,7 +23,7 @@ const (
 )
 
 type Event struct {
-	RxTime    time.Time
+	RxTime    time.Time `gorm:"primaryKey;uniqueIndex"`
 	EventType EventType
 	Data      []byte
 }
@@ -46,7 +47,10 @@ func NewEventLog(path string) (*EventLog, error) {
 		return nil, err
 	}
 
-	db.AutoMigrate(&Event{})
+	err = db.AutoMigrate(&Event{})
+	if err != nil {
+		return nil, err
+	}
 
 	return &EventLog{
 		db: db,
@@ -58,7 +62,7 @@ func (e *EventLog) Stream() chan Event {
 	go func() {
 		defer close(ch)
 		var batch []Event
-		e.db.FindInBatches(&batch, 100, func(tx *gorm.DB, _ int) error {
+		result := e.db.FindInBatches(&batch, 100, func(tx *gorm.DB, batchNum int) error {
 			for _, record := range batch {
 				ch <- Event{
 					RxTime:    record.RxTime,
@@ -68,6 +72,10 @@ func (e *EventLog) Stream() chan Event {
 			}
 			return nil
 		})
+		if result.Error != nil {
+			panic(result.Error)
+		}
+		log.Printf("eventlog: stream finished with %d events\n", result.RowsAffected)
 	}()
 	return ch
 }
