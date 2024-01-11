@@ -23,3 +23,6 @@ graph TD;
     notifyItem --> eventLogManager
     eventLogManager --> itemSeen
 ```
+
+Bugs:
+1. The maxitem listener isn't working. Hopefully this is redundant because the updates feed.

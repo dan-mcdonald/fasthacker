@@ -11,6 +11,7 @@ import (
 	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	sse "github.com/r3labs/sse/v2"
 )
 
@@ -20,65 +21,58 @@ type metrics struct {
 	ItemsNeeded     prometheus.Gauge
 	ItemsGetLatency prometheus.Histogram
 	ItemsGetSize    prometheus.Histogram
-	ItemsGetStatus  prometheus.CounterVec
+	ItemsGetStatus  *prometheus.CounterVec
 	logWriteLatency prometheus.Histogram
 }
 
 func newSyncMetrics() *metrics {
 	m := &metrics{
-		ItemsSeen: prometheus.NewCounter(prometheus.CounterOpts{
+		ItemsSeen: promauto.NewCounter(prometheus.CounterOpts{
 			Name: "fasthacker_items_seen",
 			Help: "Number of items seen",
 		}),
-		ItemsGotten: prometheus.NewCounter(prometheus.CounterOpts{
+		ItemsGotten: promauto.NewCounter(prometheus.CounterOpts{
 			Name: "fasthacker_items_gotten",
 			Help: "Number of items gotten",
 		}),
-		ItemsNeeded: prometheus.NewGauge(prometheus.GaugeOpts{
+		ItemsNeeded: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "fasthacker_items_needed",
 			Help: "Number of items needed",
 		}),
-		ItemsGetLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
+		ItemsGetLatency: promauto.NewHistogram(prometheus.HistogramOpts{
 			Name: "fasthacker_items_get_latency",
 			Help: "Latency of items gotten",
 		}),
-		ItemsGetSize: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "fasthacker_items_get_size",
-			Help: "Size of items gotten",
-			Buckets: []float64{
-				100,
-				1000,
-				10000,
-				100000,
-			},
+		ItemsGetSize: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "fasthacker_items_get_size",
+			Help:    "Size of items gotten",
+			Buckets: prometheus.ExponentialBuckets(32, 2, 15),
 		}),
-		ItemsGetStatus: *prometheus.NewCounterVec(prometheus.CounterOpts{
+		ItemsGetStatus: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "fasthacker_items_get_status",
 			Help: "Status of items gotten",
 		}, []string{"status"}),
-		logWriteLatency: prometheus.NewHistogram(prometheus.HistogramOpts{
-			Name: "fasthacker_log_write_latency",
-			Help: "Latency of log writes",
+		logWriteLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "fasthacker_log_write_latency",
+			Help:    "Latency of log writes",
+			Buckets: prometheus.ExponentialBuckets(0.005, 2, 12),
 		}),
 	}
-	prometheus.MustRegister(m.ItemsSeen)
-	prometheus.MustRegister(m.ItemsGotten)
-	prometheus.MustRegister(m.ItemsNeeded)
-	prometheus.MustRegister(m.ItemsGetLatency)
-	prometheus.MustRegister(m.ItemsGetSize)
-	prometheus.MustRegister(m.ItemsGetStatus)
-	prometheus.MustRegister(m.logWriteLatency)
 
 	return m
+}
+
+type itemSighting struct {
+	id      model.ItemID
+	present bool
 }
 
 type Sync struct {
 	dbPath               string
 	metrics              *metrics
-	itemSeen             chan model.ItemID
-	itemFound            chan model.ItemID
+	itemSeen             chan itemSighting
 	neededItemsWorkQueue chan model.ItemID
-	notifyItem           chan ItemUpdate
+	notifyItem           chan model.ItemUpdate
 }
 
 func NewSync(dbPath string) *Sync {
@@ -121,7 +115,7 @@ func (s *Sync) handleMaxItemEvent(msg *sse.Event) {
 			fmt.Printf("sync.handleMessage: error decoding maxitem put data: %v", err)
 		}
 		fmt.Printf("sync: new maxitem value %d\n", maxitemPutData.MaxItem)
-		s.itemSeen <- maxitemPutData.MaxItem
+		s.itemSeen <- itemSighting{id: maxitemPutData.MaxItem, present: false}
 	case "keep-alive":
 		break
 	default:
@@ -148,7 +142,7 @@ func (s *Sync) handleUpdateEvent(msg *sse.Event) {
 		}
 		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutMsg.Data.ItemIDs), len(updatePutMsg.Data.UserIDs))
 		for _, itemID := range updatePutMsg.Data.ItemIDs {
-			s.itemSeen <- itemID
+			s.itemSeen <- itemSighting{id: itemID, present: false}
 		}
 		// TODO handle profiles
 	case "keep-alive":
@@ -162,48 +156,39 @@ type MinimalItem struct {
 	ID model.ItemID `json:"id"`
 }
 
-func requestItem(itemID model.ItemID) (ItemUpdate, error) {
+func requestItem(itemID model.ItemID) (model.ItemUpdate, error) {
 	resp, err := httpClient.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/item/%d.json", itemID))
 	if err != nil {
-		return ItemUpdate{}, err
+		return model.ItemUpdate{}, err
 	}
 	defer resp.Body.Close()
 	buf := new(bytes.Buffer)
 	_, err = buf.ReadFrom(resp.Body)
 	rxTime := time.Now()
 	if err != nil {
-		return ItemUpdate{}, err
+		return model.ItemUpdate{}, err
 	}
-	return ItemUpdate{
+	return model.ItemUpdate{
 		RxTime: rxTime,
 		ID:     itemID,
 		Data:   buf.Bytes(),
 	}, nil
 }
 
-type DataUpdate[T comparable] struct {
-	RxTime time.Time
-	ID     T
-	Data   []byte
-}
-
-type UserUpdate DataUpdate[model.UserID]
-type ItemUpdate DataUpdate[model.ItemID]
-
-func requestUser(userID model.UserID) (UserUpdate, error) {
+func requestUser(userID model.UserID) (model.UserUpdate, error) {
 	fmt.Printf("requesting user %s\n", userID)
 	resp, err := httpClient.Get(fmt.Sprintf("https://hacker-news.firebaseio.com/v0/user/%s.json", userID))
 	if err != nil {
-		return UserUpdate{}, err
+		return model.UserUpdate{}, err
 	}
 	defer resp.Body.Close()
 	buf := new(bytes.Buffer)
 	_, err = buf.ReadFrom(resp.Body)
 	rxTime := time.Now()
 	if err != nil {
-		return UserUpdate{}, err
+		return model.UserUpdate{}, err
 	}
-	return UserUpdate{
+	return model.UserUpdate{
 		RxTime: rxTime,
 		ID:     userID,
 		Data:   buf.Bytes(),
@@ -235,37 +220,26 @@ func (s *Sync) updateListenerInit() error {
 }
 
 func (s *Sync) neededItemsQueueManager() {
-	actualMaxItemID := model.ItemID(1)
-	neededItems := make(map[model.ItemID]struct{})
+	neededItems := newNeededItems()
 
-	handleItemSeen := func(candidateMaxItem model.ItemID) {
+	handleItemSeen := func(itemSighting itemSighting) {
 		s.metrics.ItemsSeen.Inc()
-		if candidateMaxItem > actualMaxItemID {
-			oldMaxItemID := actualMaxItemID
-			actualMaxItemID = candidateMaxItem
-			for i := oldMaxItemID + 1; i <= actualMaxItemID; i++ {
-				neededItems[i] = struct{}{}
-			}
-			s.metrics.ItemsNeeded.Set(float64(len(neededItems)))
-		}
+		neededItems.notifySeen(itemSighting)
+		s.metrics.ItemsNeeded.Set(float64(neededItems.size()))
 	}
 
 	for {
-		if len(neededItems) == 0 {
+		if neededItems.empty() {
 			candidateMaxItem := <-s.itemSeen
 			handleItemSeen(candidateMaxItem)
 		} else {
-			var nextItem model.ItemID
-			for itemID := range neededItems {
-				nextItem = itemID
-				break
-			}
+			nextItem := neededItems.next()
 			select {
 			case candidateMaxItem := <-s.itemSeen:
 				handleItemSeen(candidateMaxItem)
 			case s.neededItemsWorkQueue <- nextItem:
-				delete(neededItems, nextItem)
-				s.metrics.ItemsNeeded.Set(float64(len(neededItems)))
+				neededItems.remove(nextItem)
+				s.metrics.ItemsNeeded.Set(float64(neededItems.size()))
 			}
 		}
 	}
@@ -287,57 +261,48 @@ func (s *Sync) getterWorker() {
 	}
 }
 
+const logBatchWriteSize = 100
+
 func (s *Sync) startEventLogManager() error {
 	eventLog, err := eventlog.NewEventLog(s.dbPath)
 	if err != nil {
 		return err
 	}
 	initCount := 0
-	for event := range eventLog.Stream() {
-		switch event.EventType {
-		case eventlog.TypeItem:
-			var item model.Item
-			err = json.Unmarshal(event.Data, &item)
-			if err != nil {
-				return err
-			}
-			s.itemSeen <- item.ID
-		case eventlog.TypeUser:
-			panic("todo handle user object")
-		default:
-			log.Fatalf("unknown event type: %s", event.EventType)
-		}
+	for itemUpdate := range eventLog.ItemStream() {
+		s.itemSeen <- itemSighting{id: itemUpdate.ID, present: true}
 		initCount++
 	}
 	fmt.Printf("sync: db initialized with %d items\n", initCount)
 
 	go func() {
 		defer eventLog.Close()
+		var batch []model.ItemUpdate
 		for itemUpdate := range s.notifyItem {
-			s.itemSeen <- itemUpdate.ID
-			timer := prometheus.NewTimer(s.metrics.logWriteLatency)
-			err := eventLog.Write(eventlog.Event{
-				RxTime:    itemUpdate.RxTime,
-				EventType: eventlog.TypeItem,
-				Data:      itemUpdate.Data,
-			})
-			if err != nil {
-				log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+			s.itemSeen <- itemSighting{id: itemUpdate.ID, present: true}
+			batch = append(batch, itemUpdate)
+			if len(batch) >= logBatchWriteSize {
+				timer := prometheus.NewTimer(s.metrics.logWriteLatency)
+				err := eventLog.Write(batch)
+				if err != nil {
+					log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+				}
+				timer.ObserveDuration()
+				batch = batch[:0]
 			}
-			timer.ObserveDuration()
 		}
 	}()
 	return nil
 }
 
-const worker_count = 100
+const worker_count = 200
 
 // Start runs the sync.
 func (s *Sync) Start() error {
-	s.itemSeen = make(chan model.ItemID, worker_count)
+	s.itemSeen = make(chan itemSighting, worker_count)
 	s.neededItemsWorkQueue = make(chan model.ItemID, worker_count)
 	go s.neededItemsQueueManager()
-	s.notifyItem = make(chan ItemUpdate, worker_count)
+	s.notifyItem = make(chan model.ItemUpdate, worker_count)
 
 	var err error
 

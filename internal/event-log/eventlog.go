@@ -10,6 +10,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/dan-mcdonald/fasthacker/internal/model"
 	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/ncruces/go-sqlite3/gormlite"
 	"gorm.io/gorm"
@@ -22,10 +23,11 @@ const (
 	TypeUser = "user"
 )
 
-type Event struct {
-	RxTime    time.Time `gorm:"primaryKey;uniqueIndex"`
-	EventType EventType
-	Data      []byte
+type itemEvent struct {
+	ID     uint64       `gorm:"primaryKey;autoIncrement:true"`
+	RxTime time.Time    `gorm:"uniqueIndex:idx_rxtime_itemid"`
+	ItemID model.ItemID `gorm:"uniqueIndex:idx_rxtime_itemid"`
+	Data   []byte
 }
 
 type EventLog struct {
@@ -47,7 +49,7 @@ func NewEventLog(path string) (*EventLog, error) {
 		return nil, err
 	}
 
-	err = db.AutoMigrate(&Event{})
+	err = db.AutoMigrate(&itemEvent{})
 	if err != nil {
 		return nil, err
 	}
@@ -57,17 +59,17 @@ func NewEventLog(path string) (*EventLog, error) {
 	}, nil
 }
 
-func (e *EventLog) Stream() chan Event {
-	ch := make(chan Event, 100)
+func (e *EventLog) ItemStream() chan model.ItemUpdate {
+	ch := make(chan model.ItemUpdate, 100)
 	go func() {
 		defer close(ch)
-		var batch []Event
-		result := e.db.FindInBatches(&batch, 100, func(tx *gorm.DB, batchNum int) error {
+		var batch []itemEvent
+		result := e.db.Where("data IS NOT NULL").FindInBatches(&batch, 100, func(tx *gorm.DB, batchNum int) error {
 			for _, record := range batch {
-				ch <- Event{
-					RxTime:    record.RxTime,
-					EventType: record.EventType,
-					Data:      record.Data,
+				ch <- model.ItemUpdate{
+					RxTime: record.RxTime,
+					ID:     record.ItemID,
+					Data:   record.Data,
 				}
 			}
 			return nil
@@ -81,6 +83,14 @@ func (e *EventLog) Stream() chan Event {
 }
 
 // Write an event to the log
-func (e *EventLog) Write(event Event) error {
-	return e.db.Create(event).Error
+func (e *EventLog) Write(updates []model.ItemUpdate) error {
+	events := make([]itemEvent, len(updates))
+	for i, update := range updates {
+		events[i] = itemEvent{
+			RxTime: update.RxTime,
+			ItemID: update.ID,
+			Data:   update.Data,
+		}
+	}
+	return e.db.Create(events).Error
 }

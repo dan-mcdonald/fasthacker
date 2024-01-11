@@ -60,3 +60,12 @@ func (s *Item) Site() (string, error) {
 	}
 	return parsedUrl.Hostname(), nil
 }
+
+type DataUpdate[T comparable] struct {
+	RxTime time.Time
+	ID     T
+	Data   []byte
+}
+
+type UserUpdate DataUpdate[UserID]
+type ItemUpdate DataUpdate[ItemID]

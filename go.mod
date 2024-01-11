@@ -1,6 +1,6 @@
 module github.com/dan-mcdonald/fasthacker
 
-go 1.21.5
+go 1.21.6
 
 require github.com/Code-Hex/go-generics-cache v1.3.1 // direct
 
@@ -28,4 +28,5 @@ require (
 	golang.org/x/net v0.0.0-20191116160921-f9c825593386 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
+	gorm.io/hints v1.1.2
 )
