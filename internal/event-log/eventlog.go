@@ -7,7 +7,9 @@ package eventlog
 // The CSV log is not thread-safe
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/dan-mcdonald/fasthacker/internal/model"
@@ -49,10 +51,12 @@ func NewEventLog(path string) (*EventLog, error) {
 		return nil, err
 	}
 
-	err = db.AutoMigrate(&itemEvent{})
+	fmt.Println("eventlog: migration start")
+	err = db.Debug().AutoMigrate(&itemEvent{})
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("eventlog: migration complete")
 
 	return &EventLog{
 		db: db,
@@ -60,11 +64,12 @@ func NewEventLog(path string) (*EventLog, error) {
 }
 
 func (e *EventLog) ItemStream() chan model.ItemUpdate {
-	ch := make(chan model.ItemUpdate, 100)
+	const batchSize = 1000
+	ch := make(chan model.ItemUpdate, batchSize)
 	go func() {
 		defer close(ch)
 		var batch []itemEvent
-		result := e.db.Where("data IS NOT NULL").FindInBatches(&batch, 100, func(tx *gorm.DB, batchNum int) error {
+		result := e.db.Where("data IS NOT NULL").FindInBatches(&batch, batchSize, func(tx *gorm.DB, batchNum int) error {
 			for _, record := range batch {
 				ch <- model.ItemUpdate{
 					RxTime: record.RxTime,
@@ -72,8 +77,10 @@ func (e *EventLog) ItemStream() chan model.ItemUpdate {
 					Data:   record.Data,
 				}
 			}
+			os.Stdout.Write([]byte("."))
 			return nil
 		})
+		os.Stdout.Write([]byte("\n"))
 		if result.Error != nil {
 			panic(result.Error)
 		}
