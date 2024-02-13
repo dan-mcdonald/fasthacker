@@ -52,9 +52,11 @@ func NewEventLog(path string) (*EventLog, error) {
 	}
 
 	fmt.Println("eventlog: migration start")
-	err = db.Debug().AutoMigrate(&itemEvent{})
-	if err != nil {
-		return nil, err
+	migrator := db.Debug().Migrator()
+	if !migrator.HasTable(&itemEvent{}) {
+		if err := migrator.CreateTable(&itemEvent{}); err != nil {
+			return nil, err
+		}
 	}
 	fmt.Println("eventlog: migration complete")
 
@@ -77,7 +79,9 @@ func (e *EventLog) ItemStream() chan model.ItemUpdate {
 					Data:   record.Data,
 				}
 			}
-			os.Stdout.Write([]byte("."))
+			if batchNum%100 == 0 {
+				os.Stdout.Write([]byte("."))
+			}
 			return nil
 		})
 		os.Stdout.Write([]byte("\n"))
