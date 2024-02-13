@@ -295,7 +295,7 @@ func (s *Sync) startEventLogManager() error {
 	return nil
 }
 
-const worker_count = 200
+const worker_count = 400
 
 // Start runs the sync.
 func (s *Sync) Start() error {
