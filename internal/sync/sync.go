@@ -70,7 +70,7 @@ type itemSighting struct {
 type Sync struct {
 	dbPath               string
 	metrics              *metrics
-	itemSeen             chan itemSighting
+	itemSeen             chan []itemSighting
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan model.ItemUpdate
 }
@@ -115,7 +115,7 @@ func (s *Sync) handleMaxItemEvent(msg *sse.Event) {
 			fmt.Printf("sync.handleMessage: error decoding maxitem put data: %v", err)
 		}
 		fmt.Printf("sync: new maxitem value %d\n", maxitemPutData.MaxItem)
-		s.itemSeen <- itemSighting{id: maxitemPutData.MaxItem, present: false}
+		s.itemSeen <- []itemSighting{{id: maxitemPutData.MaxItem, present: false}}
 	case "keep-alive":
 		break
 	default:
@@ -141,9 +141,11 @@ func (s *Sync) handleUpdateEvent(msg *sse.Event) {
 			fmt.Printf("sync.handleUpdateEvent: error decoding update put data: %v", err)
 		}
 		fmt.Printf("sync: update got %d items and %d profiles\n", len(updatePutMsg.Data.ItemIDs), len(updatePutMsg.Data.UserIDs))
+		itemSightings := make([]itemSighting, len(updatePutMsg.Data.ItemIDs))
 		for _, itemID := range updatePutMsg.Data.ItemIDs {
-			s.itemSeen <- itemSighting{id: itemID, present: false}
+			itemSightings = append(itemSightings, itemSighting{id: itemID, present: false})
 		}
+		s.itemSeen <- itemSightings
 		// TODO handle profiles
 	case "keep-alive":
 		break
@@ -222,9 +224,11 @@ func (s *Sync) updateListenerInit() error {
 func (s *Sync) neededItemsQueueManager() {
 	neededItems := newNeededItems()
 
-	handleItemSeen := func(itemSighting itemSighting) {
+	handleItemSeen := func(itemSightings []itemSighting) {
 		s.metrics.ItemsSeen.Inc()
-		neededItems.notifySeen(itemSighting)
+		for _, itemSighting := range itemSightings {
+			neededItems.notifySeen(itemSighting)
+		}
 		s.metrics.ItemsNeeded.Set(float64(neededItems.size()))
 	}
 
@@ -268,18 +272,19 @@ func (s *Sync) startEventLogManager() error {
 	if err != nil {
 		return err
 	}
-	initCount := 0
-	for itemUpdate := range eventLog.ItemStream() {
-		s.itemSeen <- itemSighting{id: itemUpdate.ID, present: true}
-		initCount++
+	allItemIDs := eventLog.ItemIDs()
+	itemSightings := make([]itemSighting, len(allItemIDs))
+	for _, itemID := range allItemIDs {
+		itemSightings = append(itemSightings, itemSighting{id: itemID, present: true})
 	}
-	fmt.Printf("sync: db initialized with %d items\n", initCount)
+	s.itemSeen <- itemSightings
+	fmt.Printf("sync: db initialized with %d items\n", len(allItemIDs))
 
 	go func() {
 		defer eventLog.Close()
 		var batch []model.ItemUpdate
 		for itemUpdate := range s.notifyItem {
-			s.itemSeen <- itemSighting{id: itemUpdate.ID, present: true}
+			s.itemSeen <- []itemSighting{{id: itemUpdate.ID, present: true}}
 			batch = append(batch, itemUpdate)
 			if len(batch) >= logBatchWriteSize {
 				timer := prometheus.NewTimer(s.metrics.logWriteLatency)
@@ -299,7 +304,7 @@ const worker_count = 400
 
 // Start runs the sync.
 func (s *Sync) Start() error {
-	s.itemSeen = make(chan itemSighting, worker_count)
+	s.itemSeen = make(chan []itemSighting, worker_count)
 	s.neededItemsWorkQueue = make(chan model.ItemID, worker_count)
 	go s.neededItemsQueueManager()
 	s.notifyItem = make(chan model.ItemUpdate, worker_count)

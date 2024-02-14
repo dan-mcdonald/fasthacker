@@ -16,6 +16,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/embed"
 	"github.com/ncruces/go-sqlite3/gormlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type EventType string
@@ -46,7 +47,17 @@ func (e *EventLog) Close() error {
 
 // NewEventLog creates a new event log
 func NewEventLog(path string) (*EventLog, error) {
-	db, err := gorm.Open(gormlite.Open(path), &gorm.Config{})
+	logger := logger.New(
+		log.New(os.Stdout, "\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold: 500 * time.Millisecond,
+			LogLevel:      logger.Silent,
+			Colorful:      true,
+		},
+	)
+	db, err := gorm.Open(gormlite.Open(path), &gorm.Config{
+		Logger: logger,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -65,32 +76,17 @@ func NewEventLog(path string) (*EventLog, error) {
 	}, nil
 }
 
-func (e *EventLog) ItemStream() chan model.ItemUpdate {
-	const batchSize = 1000
-	ch := make(chan model.ItemUpdate, batchSize)
-	go func() {
-		defer close(ch)
-		var batch []itemEvent
-		result := e.db.Where("data IS NOT NULL").FindInBatches(&batch, batchSize, func(tx *gorm.DB, batchNum int) error {
-			for _, record := range batch {
-				ch <- model.ItemUpdate{
-					RxTime: record.RxTime,
-					ID:     record.ItemID,
-					Data:   record.Data,
-				}
-			}
-			if batchNum%100 == 0 {
-				os.Stdout.Write([]byte("."))
-			}
-			return nil
-		})
-		os.Stdout.Write([]byte("\n"))
-		if result.Error != nil {
-			panic(result.Error)
-		}
-		log.Printf("eventlog: stream finished with %d events\n", result.RowsAffected)
+func (e *EventLog) ItemIDs() []model.ItemID {
+	startTime := time.Now()
+	defer func() {
+		fmt.Printf("eventlog.ItemIDs took %v\n", time.Since(startTime))
 	}()
-	return ch
+	var itemIDs []model.ItemID
+	tx := e.db.Model(&itemEvent{}).Pluck("item_id", &itemIDs)
+	if tx.Error != nil {
+		log.Fatalf("eventlog.ItemIDs: error reading item IDs: %v\n", tx.Error)
+	}
+	return itemIDs
 }
 
 // Write an event to the log
