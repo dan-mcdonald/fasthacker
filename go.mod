@@ -13,10 +13,7 @@ require (
 
 require github.com/avast/retry-go/v4 v4.5.1
 
-require (
-	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
-)
+require google.golang.org/protobuf v1.32.0 // indirect
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -26,11 +23,11 @@ require (
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/client_model v0.5.0 // indirect
-	github.com/prometheus/common v0.45.0 // indirect
+	github.com/prometheus/common v0.46.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/tetratelabs/wazero v1.6.0 // indirect
-	golang.org/x/exp v0.0.0-20220328175248-053ad81199eb // indirect
-	golang.org/x/net v0.17.0 // indirect
-	golang.org/x/sys v0.16.0 // indirect
+	golang.org/x/exp v0.0.0-20240213143201-ec583247a57a // indirect
+	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/sys v0.17.0 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
 )
