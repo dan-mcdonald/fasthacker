@@ -11,6 +11,8 @@ require (
 	gorm.io/gorm v1.25.5
 )
 
+require github.com/avast/retry-go/v4 v4.5.1
+
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.1.1 // indirect

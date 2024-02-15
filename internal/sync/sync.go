@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/avast/retry-go/v4"
 	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
@@ -168,6 +169,7 @@ func requestItem(itemID model.ItemID) (model.ItemUpdate, error) {
 	_, err = buf.ReadFrom(resp.Body)
 	rxTime := time.Now()
 	if err != nil {
+		log.Printf("sync.requestItem: warning error reading response body: %v\n", err)
 		return model.ItemUpdate{}, err
 	}
 	return model.ItemUpdate{
@@ -252,7 +254,9 @@ func (s *Sync) neededItemsQueueManager() {
 func (s *Sync) getterWorker() {
 	for itemID := range s.neededItemsWorkQueue {
 		timer := prometheus.NewTimer(s.metrics.ItemsGetLatency)
-		itemUpdate, err := requestItem(itemID)
+		itemUpdate, err := retry.DoWithData(func() (model.ItemUpdate, error) {
+			return requestItem(itemID)
+		})
 		if err != nil {
 			s.metrics.ItemsGetStatus.WithLabelValues("error").Inc()
 			log.Fatalf("sync.getterWorker: error requesting item %d: %v\n", itemID, err)
