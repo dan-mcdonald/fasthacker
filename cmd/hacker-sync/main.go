@@ -8,6 +8,7 @@ import (
 	"os/signal"
 
 	"github.com/dan-mcdonald/fasthacker/internal/sync"
+	"github.com/dan-mcdonald/fasthacker/internal/web"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -23,6 +24,7 @@ func main() {
 		log.Println("starting metrics server http://localhost:9999/metrics")
 		log.Fatal(http.ListenAndServe("localhost:9999", nil))
 	}()
+	go web.Start()
 	<-chInterrupt
 	fmt.Println("interrupt received")
 }

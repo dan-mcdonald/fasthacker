@@ -1,4 +1,4 @@
-package main
+package web
 
 import (
 	"context"
@@ -136,7 +136,7 @@ func rfc3339(t model.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-func main() {
+func Start() {
 	fmt.Println("fasthacker starting")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
