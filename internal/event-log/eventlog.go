@@ -7,6 +7,8 @@ package eventlog
 // The CSV log is not thread-safe
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -100,4 +102,18 @@ func (e *EventLog) Write(updates []model.ItemUpdate) error {
 		}
 	}
 	return e.db.Create(events).Error
+}
+
+func (e *EventLog) GetLatestItem(id model.ItemID) (*model.Item, error) {
+	var event itemEvent
+	tx := e.db.Where("item_id = ?", id).Order("rx_time DESC").First(&event)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	jsonDecoder := json.NewDecoder(bytes.NewReader(event.Data))
+	var item model.Item
+	if err := jsonDecoder.Decode(&item); err != nil {
+		return nil, err
+	}
+	return &item, nil
 }

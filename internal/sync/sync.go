@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -68,12 +69,41 @@ type itemSighting struct {
 	present bool
 }
 
+type eventStoreResponse struct {
+	item *model.Item
+	err  error
+}
+
+type eventStoreRequestType int
+
+const (
+	eventStoreRequestTypeGetLatestItem eventStoreRequestType = iota
+)
+
+type eventStoreRequest struct {
+	reqType eventStoreRequestType
+	id      model.ItemID
+	resp    chan eventStoreResponse
+}
+
+type EventStore struct {
+	req chan eventStoreRequest
+}
+
+func (eq *EventStore) GetLatestItem(id model.ItemID) (*model.Item, error) {
+	respCh := make(chan eventStoreResponse)
+	eq.req <- eventStoreRequest{reqType: 0, id: id, resp: respCh}
+	resp := <-respCh
+	return resp.item, resp.err
+}
+
 type Sync struct {
 	dbPath               string
 	metrics              *metrics
 	itemSeen             chan []itemSighting
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan model.ItemUpdate
+	EventQuery           *EventStore
 }
 
 func NewSync(dbPath string) *Sync {
@@ -271,7 +301,7 @@ func (s *Sync) getterWorker() {
 
 const logBatchWriteSize = 100
 
-func (s *Sync) startEventLogManager() error {
+func (s *Sync) startEventLogManager(ctx context.Context) error {
 	eventLog, err := eventlog.NewEventLog(s.dbPath)
 	if err != nil {
 		return err
@@ -284,20 +314,37 @@ func (s *Sync) startEventLogManager() error {
 	s.itemSeen <- itemSightings
 	fmt.Printf("sync: db initialized with %d items\n", len(allItemIDs))
 
+	s.EventQuery = &EventStore{
+		req: make(chan eventStoreRequest),
+	}
+
 	go func() {
 		defer eventLog.Close()
 		var batch []model.ItemUpdate
-		for itemUpdate := range s.notifyItem {
-			s.itemSeen <- []itemSighting{{id: itemUpdate.ID, present: true}}
-			batch = append(batch, itemUpdate)
-			if len(batch) >= logBatchWriteSize {
-				timer := prometheus.NewTimer(s.metrics.logWriteLatency)
-				err := eventLog.Write(batch)
-				if err != nil {
-					log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+		for {
+			select {
+			case itemUpdate := <-s.notifyItem:
+				s.itemSeen <- []itemSighting{{id: itemUpdate.ID, present: true}}
+				batch = append(batch, itemUpdate)
+				if len(batch) >= logBatchWriteSize {
+					timer := prometheus.NewTimer(s.metrics.logWriteLatency)
+					err := eventLog.Write(batch)
+					if err != nil {
+						log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
+					}
+					timer.ObserveDuration()
+					batch = batch[:0]
 				}
-				timer.ObserveDuration()
-				batch = batch[:0]
+			case req := <-s.EventQuery.req:
+				switch req.reqType {
+				case eventStoreRequestTypeGetLatestItem:
+					item, err := eventLog.GetLatestItem(req.id)
+					req.resp <- eventStoreResponse{item: item, err: err}
+				default:
+					req.resp <- eventStoreResponse{item: nil, err: fmt.Errorf("unknown request type: %d", req.reqType)}
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -307,7 +354,7 @@ func (s *Sync) startEventLogManager() error {
 const worker_count = 400
 
 // Start runs the sync.
-func (s *Sync) Start() error {
+func (s *Sync) Start(ctx context.Context) error {
 	s.itemSeen = make(chan []itemSighting, worker_count)
 	s.neededItemsWorkQueue = make(chan model.ItemID, worker_count)
 	go s.neededItemsQueueManager()
@@ -315,7 +362,7 @@ func (s *Sync) Start() error {
 
 	var err error
 
-	err = s.startEventLogManager()
+	err = s.startEventLogManager(ctx)
 	if err != nil {
 		log.Fatalf("sync.Run: error starting event log manager: %v\n", err)
 	}

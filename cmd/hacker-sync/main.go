@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,7 +19,7 @@ func main() {
 	chInterrupt := make(chan os.Signal, 1)
 	signal.Notify(chInterrupt, os.Interrupt)
 	synk := sync.NewSync("hacker.db")
-	go synk.Start()
+	go synk.Start(context.Background())
 	http.Handle("/metrics", promhttp.Handler())
 	go func() {
 		log.Println("starting metrics server http://localhost:9999/metrics")
