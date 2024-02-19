@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
 	"github.com/dan-mcdonald/fasthacker/internal/loader"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 )
@@ -136,7 +137,7 @@ func rfc3339(t model.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-func Start() {
+func Start(es *eventstore.EventStore) {
 	fmt.Println("fasthacker starting")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -168,7 +169,7 @@ func Start() {
 		indexTmpl:     indexTmpl,
 		itemTmpl:      itemTmpl,
 		staticHandler: http.FileServer(http.Dir("static")),
-		dl:            loader.NewLoader(ctx),
+		dl:            loader.NewLoader(ctx, es),
 	}
 	http.HandleFunc("/", fastHacker.handleDefault)
 	http.HandleFunc("/item", fastHacker.handleItem)

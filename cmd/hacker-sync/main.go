@@ -25,7 +25,7 @@ func main() {
 		log.Println("starting metrics server http://localhost:9999/metrics")
 		log.Fatal(http.ListenAndServe("localhost:9999", nil))
 	}()
-	go web.Start()
+	go web.Start(<-synk.EventStore())
 	<-chInterrupt
 	fmt.Println("interrupt received")
 }

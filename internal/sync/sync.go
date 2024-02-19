@@ -11,6 +11,7 @@ import (
 
 	"github.com/avast/retry-go/v4"
 	eventlog "github.com/dan-mcdonald/fasthacker/internal/event-log"
+	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -69,41 +70,31 @@ type itemSighting struct {
 	present bool
 }
 
-type eventStoreResponse struct {
-	item *model.Item
-	err  error
-}
-
-type eventStoreRequestType int
-
-const (
-	eventStoreRequestTypeGetLatestItem eventStoreRequestType = iota
-)
-
-type eventStoreRequest struct {
-	reqType eventStoreRequestType
-	id      model.ItemID
-	resp    chan eventStoreResponse
-}
-
-type EventStore struct {
-	req chan eventStoreRequest
-}
-
-func (eq *EventStore) GetLatestItem(id model.ItemID) (*model.Item, error) {
-	respCh := make(chan eventStoreResponse)
-	eq.req <- eventStoreRequest{reqType: 0, id: id, resp: respCh}
-	resp := <-respCh
-	return resp.item, resp.err
-}
-
 type Sync struct {
 	dbPath               string
 	metrics              *metrics
 	itemSeen             chan []itemSighting
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan model.ItemUpdate
-	EventQuery           *EventStore
+	eventStore           *eventstore.EventStore
+	eventStoreObserver   []chan *eventstore.EventStore
+}
+
+func (s *Sync) EventStore() chan *eventstore.EventStore {
+	ch := make(chan *eventstore.EventStore, 1)
+	s.eventStoreObserver = append(s.eventStoreObserver, ch)
+	if s.eventStore != nil {
+		s.notifyEventStore()
+	}
+	return ch
+}
+
+func (s *Sync) notifyEventStore() {
+	for _, ch := range s.eventStoreObserver {
+		ch <- s.eventStore
+		close(ch)
+	}
+	s.eventStoreObserver = nil
 }
 
 func NewSync(dbPath string) *Sync {
@@ -314,9 +305,9 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 	s.itemSeen <- itemSightings
 	fmt.Printf("sync: db initialized with %d items\n", len(allItemIDs))
 
-	s.EventQuery = &EventStore{
-		req: make(chan eventStoreRequest),
-	}
+	eventStoreReqCh := make(chan eventstore.EventStoreRequest)
+	s.eventStore = eventstore.NewEventStore(eventStoreReqCh)
+	s.notifyEventStore()
 
 	go func() {
 		defer eventLog.Close()
@@ -335,13 +326,13 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 					timer.ObserveDuration()
 					batch = batch[:0]
 				}
-			case req := <-s.EventQuery.req:
-				switch req.reqType {
-				case eventStoreRequestTypeGetLatestItem:
-					item, err := eventLog.GetLatestItem(req.id)
-					req.resp <- eventStoreResponse{item: item, err: err}
+			case req := <-eventStoreReqCh:
+				switch req.ReqType {
+				case eventstore.EventStoreRequestTypeGetLatestItem:
+					item, err := eventLog.GetLatestItem(req.ID)
+					req.Resp <- eventstore.EventStoreResponse{Item: item, Err: err}
 				default:
-					req.resp <- eventStoreResponse{item: nil, err: fmt.Errorf("unknown request type: %d", req.reqType)}
+					req.Resp <- eventstore.EventStoreResponse{Item: nil, Err: fmt.Errorf("unknown request type: %d", req.ReqType)}
 				}
 			case <-ctx.Done():
 				return

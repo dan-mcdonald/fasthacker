@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	cache "github.com/Code-Hex/go-generics-cache"
+	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
+	eventstoredataloader "github.com/dan-mcdonald/fasthacker/internal/event_store_data_loader"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 )
 
@@ -29,13 +30,9 @@ type CachingDataLoader struct {
 	topStories   *model.TopStories
 }
 
-func NewLoader(ctx context.Context) DataLoader {
+func NewLoader(ctx context.Context, es *eventstore.EventStore) DataLoader {
 	return CachingDataLoader{
-		delegate: FirebaseNewsDataLoader{
-			c: http.Client{
-				Timeout: 15 * time.Second,
-			},
-		},
+		delegate:     eventstoredataloader.NewEventStoreDataLoader(es),
 		storyCache:   cache.NewContext[model.ItemID, model.Item](ctx),
 		commentCache: cache.NewContext[model.ItemID, model.Item](ctx),
 		topStories:   nil,
