@@ -30,8 +30,8 @@ const (
 
 type itemEvent struct {
 	ID     uint64       `gorm:"primaryKey;autoIncrement:true"`
-	RxTime time.Time    `gorm:"uniqueIndex:idx_rxtime_itemid"`
-	ItemID model.ItemID `gorm:"uniqueIndex:idx_rxtime_itemid"`
+	RxTime time.Time    `gorm:"uniqueIndex:idx_itemid_rxtime,priority:2"`
+	ItemID model.ItemID `gorm:"uniqueIndex:idx_itemid_rxtime,priority:1"`
 	Data   []byte
 }
 
