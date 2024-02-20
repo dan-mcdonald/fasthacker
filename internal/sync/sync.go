@@ -19,13 +19,14 @@ import (
 )
 
 type metrics struct {
-	ItemsSeen       prometheus.Counter
-	ItemsGotten     prometheus.Counter
-	ItemsNeeded     prometheus.Gauge
-	ItemsGetLatency prometheus.Histogram
-	ItemsGetSize    prometheus.Histogram
-	ItemsGetStatus  *prometheus.CounterVec
-	logWriteLatency prometheus.Histogram
+	ItemsSeen                 prometheus.Counter
+	ItemsGotten               prometheus.Counter
+	ItemsNeeded               prometheus.Gauge
+	ItemsGetLatency           prometheus.Histogram
+	ItemsGetSize              prometheus.Histogram
+	ItemsGetStatus            *prometheus.CounterVec
+	logWriteItemBatchLatency  prometheus.Histogram
+	logWriteTopStoriesLatency prometheus.Histogram
 }
 
 func newSyncMetrics() *metrics {
@@ -55,9 +56,14 @@ func newSyncMetrics() *metrics {
 			Name: "fasthacker_items_get_status",
 			Help: "Status of items gotten",
 		}, []string{"status"}),
-		logWriteLatency: promauto.NewHistogram(prometheus.HistogramOpts{
-			Name:    "fasthacker_log_write_latency",
-			Help:    "Latency of log writes",
+		logWriteItemBatchLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "fasthacker_log_write_item_batch_latency",
+			Help:    "Latency of log item batch writes",
+			Buckets: prometheus.ExponentialBuckets(0.005, 2, 12),
+		}),
+		logWriteTopStoriesLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+			Name:    "fasthacker_log_write_topstories_latency",
+			Help:    "Latency of log topstories writes",
 			Buckets: prometheus.ExponentialBuckets(0.005, 2, 12),
 		}),
 	}
@@ -76,6 +82,7 @@ type Sync struct {
 	itemSeen             chan []itemSighting
 	neededItemsWorkQueue chan model.ItemID
 	notifyItem           chan model.ItemUpdate
+	notifyTopStories     chan model.TopStoriesUpdate
 	eventStore           *eventstore.EventStore
 	eventStoreObserver   []chan *eventstore.EventStore
 }
@@ -266,6 +273,61 @@ func (s *Sync) updateListenerInit() error {
 	return nil
 }
 
+func (s *Sync) topStoriesListenerInit() error {
+	client := sse.NewClient("https://hacker-news.firebaseio.com/v0/topstories.json")
+	client.OnConnect(func(c *sse.Client) {
+		fmt.Println("sync: SSE topstories connected")
+	})
+	client.OnDisconnect(func(c *sse.Client) {
+		fmt.Println("sync: SSE topstories disconnected")
+	})
+	ch := make(chan *sse.Event)
+	go func() {
+		for {
+			select {
+			case msg := <-ch:
+				s.handleTopStoriesEvent(msg)
+			case <-time.After(5 * time.Minute):
+				log.Fatalf("sync.topStoriesListenerInit: no message received in 5 minutes")
+			}
+		}
+	}()
+	client.SubscribeChan("", ch)
+	return nil
+}
+
+type topStoriesPutMessage struct {
+	Path string           `json:"path"`
+	Data model.TopStories `json:"data"`
+}
+
+func (s *Sync) handleTopStoriesEvent(msg *sse.Event) {
+	rxTime := time.Now()
+	msgEvent := string(msg.Event[:])
+	switch msgEvent {
+	case "put":
+		jsonDecoder := json.NewDecoder(bytes.NewReader(msg.Data))
+		var topStoriesPutMsg topStoriesPutMessage
+		if err := jsonDecoder.Decode(&topStoriesPutMsg); err != nil {
+			fmt.Printf("sync.handleTopStoriesEvent: error decoding topstories put data: %v", err)
+		}
+		fmt.Printf("sync: got %d topstories\n", len(topStoriesPutMsg.Data))
+		var data bytes.Buffer
+		jsonEncoder := json.NewEncoder(&data)
+		if err := jsonEncoder.Encode(topStoriesPutMsg.Data); err != nil {
+			fmt.Printf("sync.handleTopStoriesEvent: error encoding topstories data: %v", err)
+		}
+		s.notifyTopStories <- model.TopStoriesUpdate{
+			RxTime: rxTime,
+			Data:   data.Bytes(),
+		}
+	case "keep-alive":
+		break
+	default:
+		fmt.Printf("sync: topstories unknown event: %s\n", msgEvent)
+	}
+}
+
 func (s *Sync) neededItemsQueueManager() {
 	neededItems := newNeededItems()
 
@@ -340,7 +402,7 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 				s.itemSeen <- []itemSighting{{id: itemUpdate.ID, present: true}}
 				batch = append(batch, itemUpdate)
 				if len(batch) >= logBatchWriteSize {
-					timer := prometheus.NewTimer(s.metrics.logWriteLatency)
+					timer := prometheus.NewTimer(s.metrics.logWriteItemBatchLatency)
 					err := eventLog.WriteItemBatch(batch)
 					if err != nil {
 						log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
@@ -348,6 +410,13 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 					timer.ObserveDuration()
 					batch = batch[:0]
 				}
+			case topStoriesUpdate := <-s.notifyTopStories:
+				timer := prometheus.NewTimer(s.metrics.logWriteTopStoriesLatency)
+				err := eventLog.WriteTopStories(topStoriesUpdate)
+				if err != nil {
+					log.Fatalf("sync.Run: error writing top stories: %v\n", err)
+				}
+				timer.ObserveDuration()
 			case req := <-eventStoreReqCh:
 				switch req.ReqType {
 				case eventstore.EventStoreRequestTypeGetLatestItem:
@@ -372,6 +441,7 @@ func (s *Sync) Start(ctx context.Context) error {
 	s.neededItemsWorkQueue = make(chan model.ItemID, worker_count)
 	go s.neededItemsQueueManager()
 	s.notifyItem = make(chan model.ItemUpdate, worker_count)
+	s.notifyTopStories = make(chan model.TopStoriesUpdate)
 
 	var err error
 
@@ -390,6 +460,11 @@ func (s *Sync) Start(ctx context.Context) error {
 	}
 
 	err = s.maxItemNotifierStart()
+	if err != nil {
+		return err
+	}
+
+	err = s.topStoriesListenerInit()
 	if err != nil {
 		return err
 	}

@@ -129,8 +129,12 @@ func (e *EventLog) GetLatestItem(id model.ItemID) (*model.Item, error) {
 	return &item, nil
 }
 
-func (e *EventLog) WriteTopStories(data []byte) error {
-	return e.db.Create(&topStoriesEvent{RxTime: time.Now(), Data: data}).Error
+func (e *EventLog) WriteTopStories(topStoriesUpdate model.TopStoriesUpdate) error {
+	event := topStoriesEvent{
+		RxTime: topStoriesUpdate.RxTime,
+		Data:   topStoriesUpdate.Data,
+	}
+	return e.db.Create(&event).Error
 }
 
 func (e *EventLog) GetTopStories() (model.TopStories, error) {

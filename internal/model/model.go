@@ -69,3 +69,4 @@ type DataUpdate[T comparable] struct {
 
 type UserUpdate DataUpdate[UserID]
 type ItemUpdate DataUpdate[ItemID]
+type TopStoriesUpdate DataUpdate[struct{}]
