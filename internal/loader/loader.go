@@ -86,7 +86,7 @@ func (c CachingDataLoader) GetItem(id model.ItemID) (model.Item, error) {
 	}
 	item, err := c.delegate.GetItem(id)
 	if err == nil {
-		c.itemCache.Set(id, item)
+		c.itemCache.Set(id, item, cache.WithExpiration(1*time.Minute))
 		metrics.GetItemCacheMissLatency.Observe(time.Since(start).Seconds())
 	}
 	return item, nil
