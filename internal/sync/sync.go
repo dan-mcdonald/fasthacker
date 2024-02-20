@@ -228,7 +228,18 @@ func (s *Sync) maxItemNotifierStart() error {
 	client.OnDisconnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE maxitem disconnected")
 	})
-	client.Subscribe("", s.handleMaxItemEvent)
+	ch := make(chan *sse.Event)
+	go func() {
+		for {
+			select {
+			case msg := <-ch:
+				s.handleMaxItemEvent(msg)
+			case <-time.After(5 * time.Minute):
+				log.Fatalf("sync.maxItemNotifierStart: no message received in 5 minutes")
+			}
+		}
+	}()
+	client.SubscribeChan("", ch)
 	return nil
 }
 
@@ -240,7 +251,18 @@ func (s *Sync) updateListenerInit() error {
 	client.OnDisconnect(func(c *sse.Client) {
 		fmt.Println("sync: SSE updates disconnected")
 	})
-	client.Subscribe("", s.handleUpdateEvent)
+	ch := make(chan *sse.Event)
+	go func() {
+		for {
+			select {
+			case msg := <-ch:
+				s.handleUpdateEvent(msg)
+			case <-time.After(5 * time.Minute):
+				log.Fatalf("sync.updateListenerInit: no message received in 5 minutes")
+			}
+		}
+	}()
+	client.SubscribeChan("", ch)
 	return nil
 }
 
