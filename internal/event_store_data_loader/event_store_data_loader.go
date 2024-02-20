@@ -1,8 +1,6 @@
 package eventstoredataloader
 
 import (
-	"fmt"
-
 	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
 )
@@ -16,7 +14,11 @@ func NewEventStoreDataLoader(es *eventstore.EventStore) *EventStoreDataLoader {
 }
 
 func (esdl *EventStoreDataLoader) GetTopStories() (model.TopStories, error) {
-	return nil, fmt.Errorf("not implemented")
+	item, err := esdl.es.GetTopStories()
+	if err != nil {
+		return model.TopStories{}, err
+	}
+	return *item, nil
 }
 
 func (esdl *EventStoreDataLoader) GetStory(id model.ItemID) (model.Item, error) {

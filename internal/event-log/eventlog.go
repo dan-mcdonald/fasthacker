@@ -137,16 +137,19 @@ func (e *EventLog) WriteTopStories(topStoriesUpdate model.TopStoriesUpdate) erro
 	return e.db.Create(&event).Error
 }
 
-func (e *EventLog) GetTopStories() (model.TopStories, error) {
+func (e *EventLog) GetTopStories() (*model.TopStories, error) {
 	var event topStoriesEvent
 	tx := e.db.Order("rx_time DESC").First(&event)
 	if tx.Error != nil {
 		return nil, tx.Error
+	}
+	if event.Data == nil {
+		return nil, nil
 	}
 	var topStories model.TopStories
 	jsonDecoder := json.NewDecoder(bytes.NewReader(event.Data))
 	if err := jsonDecoder.Decode(&topStories); err != nil {
 		return nil, err
 	}
-	return topStories, nil
+	return &topStories, nil
 }

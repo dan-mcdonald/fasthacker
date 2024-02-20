@@ -389,8 +389,7 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 	s.itemSeen <- itemSightings
 	fmt.Printf("sync: db initialized with %d items\n", len(allItemIDs))
 
-	eventStoreReqCh := make(chan eventstore.EventStoreRequest)
-	s.eventStore = eventstore.NewEventStore(eventStoreReqCh)
+	s.eventStore = eventstore.NewEventStore()
 	s.notifyEventStore()
 
 	go func() {
@@ -417,14 +416,12 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 					log.Fatalf("sync.Run: error writing top stories: %v\n", err)
 				}
 				timer.ObserveDuration()
-			case req := <-eventStoreReqCh:
-				switch req.ReqType {
-				case eventstore.EventStoreRequestTypeGetLatestItem:
-					item, err := eventLog.GetLatestItem(req.ID)
-					req.Resp <- eventstore.EventStoreResponse{Item: item, Err: err}
-				default:
-					req.Resp <- eventstore.EventStoreResponse{Item: nil, Err: fmt.Errorf("unknown request type: %d", req.ReqType)}
-				}
+			case getItemReq := <-s.eventStore.GetItemReq:
+				item, err := eventLog.GetLatestItem(getItemReq.ID)
+				getItemReq.Resp <- eventstore.GetItemResponse{Item: item, Err: err}
+			case getTopStoriesReq := <-s.eventStore.GetTopStoriesReq:
+				topStories, err := eventLog.GetTopStories()
+				getTopStoriesReq.Resp <- eventstore.GetTopStoriesResponse{TopStories: topStories, Err: err}
 			case <-ctx.Done():
 				return
 			}
