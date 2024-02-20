@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
@@ -137,6 +138,17 @@ func rfc3339(t model.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+func site(s *string) string {
+	if s == nil {
+		return ""
+	}
+	parsedUrl, err := url.Parse(*s)
+	if err != nil {
+		return ""
+	}
+	return parsedUrl.Host
+}
+
 func Start(es *eventstore.EventStore) {
 	fmt.Println("fasthacker starting")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,6 +162,7 @@ func Start(es *eventstore.EventStore) {
 		"multiply": func(a, b int) int { return a * b },
 		"ago":      ago,
 		"rfc3339":  rfc3339,
+		"site":     site,
 	}
 	indexTmpl := template.New("index.html")
 	indexTmpl.Funcs(funcMap)
