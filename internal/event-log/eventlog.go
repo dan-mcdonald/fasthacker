@@ -35,6 +35,12 @@ type itemEvent struct {
 	Data   []byte
 }
 
+type topStoriesEvent struct {
+	ID     uint64    `gorm:"primaryKey;autoIncrement:true"`
+	RxTime time.Time `gorm:"uniqueIndex:idx_rxtime"`
+	Data   []byte
+}
+
 type EventLog struct {
 	db *gorm.DB
 }
@@ -71,6 +77,11 @@ func NewEventLog(path string) (*EventLog, error) {
 			return nil, err
 		}
 	}
+	if !migrator.HasTable(&topStoriesEvent{}) {
+		if err := migrator.CreateTable(&topStoriesEvent{}); err != nil {
+			return nil, err
+		}
+	}
 	fmt.Println("eventlog: migration complete")
 
 	return &EventLog{
@@ -91,8 +102,8 @@ func (e *EventLog) ItemIDs() []model.ItemID {
 	return itemIDs
 }
 
-// Write an event to the log
-func (e *EventLog) Write(updates []model.ItemUpdate) error {
+// WriteItemBatch an item event to the log
+func (e *EventLog) WriteItemBatch(updates []model.ItemUpdate) error {
 	events := make([]itemEvent, len(updates))
 	for i, update := range updates {
 		events[i] = itemEvent{
@@ -116,4 +127,22 @@ func (e *EventLog) GetLatestItem(id model.ItemID) (*model.Item, error) {
 		return nil, err
 	}
 	return &item, nil
+}
+
+func (e *EventLog) WriteTopStories(data []byte) error {
+	return e.db.Create(&topStoriesEvent{RxTime: time.Now(), Data: data}).Error
+}
+
+func (e *EventLog) GetTopStories() (model.TopStories, error) {
+	var event topStoriesEvent
+	tx := e.db.Order("rx_time DESC").First(&event)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	var topStories model.TopStories
+	jsonDecoder := json.NewDecoder(bytes.NewReader(event.Data))
+	if err := jsonDecoder.Decode(&topStories); err != nil {
+		return nil, err
+	}
+	return topStories, nil
 }

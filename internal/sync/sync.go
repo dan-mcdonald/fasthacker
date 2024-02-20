@@ -319,7 +319,7 @@ func (s *Sync) startEventLogManager(ctx context.Context) error {
 				batch = append(batch, itemUpdate)
 				if len(batch) >= logBatchWriteSize {
 					timer := prometheus.NewTimer(s.metrics.logWriteLatency)
-					err := eventLog.Write(batch)
+					err := eventLog.WriteItemBatch(batch)
 					if err != nil {
 						log.Fatalf("sync.Run: error writing item %d: %v\n", itemUpdate.Data, err)
 					}
