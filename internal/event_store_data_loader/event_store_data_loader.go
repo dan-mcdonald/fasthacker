@@ -21,7 +21,7 @@ func (esdl *EventStoreDataLoader) GetTopStories() (model.TopStories, error) {
 	return *item, nil
 }
 
-func (esdl *EventStoreDataLoader) GetStory(id model.ItemID) (model.Item, error) {
+func (esdl *EventStoreDataLoader) GetItem(id model.ItemID) (model.Item, error) {
 	item, err := esdl.es.GetLatestItem(id)
 	if err != nil {
 		return model.Item{}, err

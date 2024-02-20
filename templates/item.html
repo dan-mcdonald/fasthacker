@@ -51,8 +51,8 @@
             <tr>
               <td colspan="2"></td>
               <td class="subtext"><span class="subline">
-                  <span class="score" id="score_{{$StoryID}}">{{.Score}} points</span> by <a href="user?id={{.SubmitterName}}"
-                    class="hnuser">{{.SubmitterName}}</a> <span class="age" title="{{.SubmissionTime | rfc3339}}"><a
+                  <span class="score" id="score_{{$StoryID}}">{{.Score}} points</span> by <a href="user?id={{.By}}"
+                    class="hnuser">{{.By}}</a> <span class="age" title="{{.SubmissionTime | rfc3339}}"><a
                       href="item?id={{$StoryID}}">{{.SubmissionTime | ago}} ago</a></span> <span id="unv_{{$StoryID}}"></span> | <a
                     href="hide?id={{$StoryID}}&amp;goto=item%3Fid%3D{{$StoryID}}">hide</a> | <a
                     href="https://hn.algolia.com/?query={{.Title}}&type=story&dateRange=all&sort=byDate&storyText=false&prefix&page=0"
@@ -89,8 +89,8 @@
                     </td>
                     <td class="default">
                       <div style="margin-top:2px; margin-bottom:-10px;"><span class="comhead">
-                          <a href="user?id={{.Comment.SubmitterName}}" class="hnuser">{{.Comment.SubmitterName}}</a> <span class="age" title="{{.Comment.SubmissionTime | rfc3339}}"><a
-                              href="item?id={{.Comment.ID}}">{{.Comment.SubmissionTime | ago}} ago</a></span> <span id="unv_{{.Comment.ID}}"></span> <span
+                          <a href="user?id={{.Comment.By}}" class="hnuser">{{.Comment.By}}</a> <span class="age" title="{{.Comment.Time | rfc3339}}"><a
+                              href="item?id={{.Comment.ID}}">{{.Comment.Time | ago}} ago</a></span> <span id="unv_{{.Comment.ID}}"></span> <span
                             class='navs'>
                             | <a href="#38708517" class="clicky" aria-hidden="true">next</a> <a class="togg clicky"
                               id="{{.Comment.ID}}" n="1" href="javascript:void(0)">[–]</a><span class="onstory"></span> </span>

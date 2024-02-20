@@ -4,19 +4,44 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"time"
 
 	cache "github.com/Code-Hex/go-generics-cache"
 	eventstore "github.com/dan-mcdonald/fasthacker/internal/event-store"
 	eventstoredataloader "github.com/dan-mcdonald/fasthacker/internal/event_store_data_loader"
 	"github.com/dan-mcdonald/fasthacker/internal/model"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+var metrics = struct {
+	GetItemCacheHitLatency        prometheus.Histogram
+	GetItemCacheMissLatency       prometheus.Histogram
+	GetTopStoriesCacheHitLatency  prometheus.Histogram
+	GetTopStoriesCacheMissLatency prometheus.Histogram
+}{
+	GetItemCacheHitLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "fasthacker_get_item_cache_hit_latency_seconds",
+		Help: "The latency of cache hits for GetItem",
+	}),
+	GetItemCacheMissLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "fasthacker_get_item_cache_miss_latency_seconds",
+		Help: "The latency of cache misses for GetItem",
+	}),
+	GetTopStoriesCacheHitLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "fasthacker_get_top_stories_cache_hit_latency_seconds",
+		Help: "The latency of cache hits for GetTopStories",
+	}),
+	GetTopStoriesCacheMissLatency: promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "fasthacker_get_top_stories_cache_miss_latency_seconds",
+		Help: "The latency of cache misses for GetTopStories",
+	}),
+}
 
 type DataLoader interface {
 	GetTopStories() (model.TopStories, error)
-	GetStory(id model.ItemID) (model.Item, error)
-	GetComment(id model.ItemID) (model.Item, error)
+	GetItem(id model.ItemID) (model.Item, error)
 }
 
 type FirebaseNewsDataLoader struct {
@@ -24,59 +49,47 @@ type FirebaseNewsDataLoader struct {
 }
 
 type CachingDataLoader struct {
-	delegate     DataLoader
-	storyCache   *cache.Cache[model.ItemID, model.Item]
-	commentCache *cache.Cache[model.ItemID, model.Item]
-	topStories   *model.TopStories
+	delegate        DataLoader
+	itemCache       *cache.Cache[model.ItemID, model.Item]
+	topStoriesCache *cache.Cache[struct{}, model.TopStories]
 }
 
 func NewLoader(ctx context.Context, es *eventstore.EventStore) DataLoader {
 	return CachingDataLoader{
-		delegate:     eventstoredataloader.NewEventStoreDataLoader(es),
-		storyCache:   cache.NewContext[model.ItemID, model.Item](ctx),
-		commentCache: cache.NewContext[model.ItemID, model.Item](ctx),
-		topStories:   nil,
+		delegate:        eventstoredataloader.NewEventStoreDataLoader(es),
+		itemCache:       cache.NewContext[model.ItemID, model.Item](ctx),
+		topStoriesCache: cache.NewContext[struct{}, model.TopStories](ctx),
 	}
 }
 
 func (c CachingDataLoader) GetTopStories() (model.TopStories, error) {
-	if c.topStories != nil {
-		log.Println("CachingDataLoader.GetTopStories: cache hit")
-		return *c.topStories, nil
+	start := time.Now()
+	topStories, ok := c.topStoriesCache.Get(struct{}{})
+	if ok {
+		metrics.GetTopStoriesCacheHitLatency.Observe(time.Since(start).Seconds())
+		return topStories, nil
 	}
-	log.Println("CachingDataLoader.GetTopStories: cache miss")
 	topStories, err := c.delegate.GetTopStories()
+	if err == nil {
+		c.topStoriesCache.Set(struct{}{}, topStories, cache.WithExpiration(1*time.Minute))
+		metrics.GetTopStoriesCacheMissLatency.Observe(time.Since(start).Seconds())
+	}
 	return topStories, err
 }
 
-func (c CachingDataLoader) GetStory(id model.ItemID) (model.Item, error) {
-	story, ok := c.storyCache.Get(id)
+func (c CachingDataLoader) GetItem(id model.ItemID) (model.Item, error) {
+	start := time.Now()
+	item, ok := c.itemCache.Get(id)
 	if ok {
-		log.Printf("CachingDataLoader.GetStory(%d): cache hit", id)
-		return story, nil
+		metrics.GetItemCacheHitLatency.Observe(time.Since(start).Seconds())
+		return item, nil
 	}
-	log.Printf("CachingDataLoader.GetStory(%d): cache miss", id)
-	story, err := c.delegate.GetStory(id)
-	if err != nil {
-		return model.Item{}, err
+	item, err := c.delegate.GetItem(id)
+	if err == nil {
+		c.itemCache.Set(id, item)
+		metrics.GetItemCacheMissLatency.Observe(time.Since(start).Seconds())
 	}
-	c.storyCache.Set(id, story)
-	return story, nil
-}
-
-func (c CachingDataLoader) GetComment(id model.ItemID) (model.Item, error) {
-	comment, ok := c.commentCache.Get(id)
-	if ok {
-		log.Printf("CachingDataLoader.GetComment(%d): cache hit", id)
-		return comment, nil
-	}
-	log.Printf("CachingDataLoader.GetComment(%d): cache miss", id)
-	comment, err := c.delegate.GetComment(id)
-	if err != nil {
-		return model.Item{}, err
-	}
-	c.commentCache.Set(id, comment)
-	return comment, nil
+	return item, nil
 }
 
 func (fb FirebaseNewsDataLoader) GetTopStories() (model.TopStories, error) {

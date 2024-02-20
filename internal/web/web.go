@@ -43,7 +43,7 @@ func GetCommentTree(story model.Item, dl *loader.DataLoader) ([]TraversedComment
 	var commentTraversal []TraversedComment
 	var traverse func(model.ItemID, int) error
 	traverse = func(commentId model.ItemID, level int) error {
-		comment, err := (*dl).GetComment(commentId)
+		comment, err := (*dl).GetItem(commentId)
 		if err != nil {
 			return err
 		}
@@ -76,7 +76,7 @@ func (srv *fastHacker) handleItem(w http.ResponseWriter, r *http.Request) {
 	}
 	storyId := model.ItemID(0)
 	fmt.Sscanf(id, "%d", &storyId)
-	story, err := srv.dl.GetStory(storyId)
+	story, err := srv.dl.GetItem(storyId)
 	if err != nil {
 		log.Printf("handleItem GetStory(%d): %s", storyId, err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -115,7 +115,7 @@ func (srv *fastHacker) handleDefault(w http.ResponseWriter, r *http.Request) {
 		if idx > 30 {
 			break
 		}
-		story, err := srv.dl.GetStory(storyId)
+		story, err := srv.dl.GetItem(storyId)
 		if err != nil {
 			log.Printf("handleIndex GetStory(%d): %s", storyId, err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
